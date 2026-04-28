@@ -263,30 +263,30 @@ function sortChapterImageUrls(
   words: unknown,
 ): string[] {
   const urls = contents.map((item) => String(item.url ?? "").trim());
-  const order = Array.isArray(words)
-    ? words.map((n) => Number(n)).filter((n) => Number.isInteger(n))
-    : [];
-  if (!order.length) {
+  const orderList = Array.isArray(words) ? words.map((n) => Number(n)) : [];
+
+  if (orderList.length !== urls.length) {
     return urls.filter(Boolean);
   }
 
-  const sorted: string[] = [];
-  const used = new Set<number>();
-  for (const idx of order) {
-    if (idx >= 0 && idx < urls.length) {
-      const value = urls[idx];
-      if (value) {
-        sorted.push(value);
-        used.add(idx);
-      }
-    }
+  const mapped = urls
+    .map((url, index) => ({
+      url,
+      index,
+      order: orderList[index],
+    }))
+    .filter((item) => item.url && Number.isFinite(item.order));
+
+  if (!mapped.length) {
+    return urls.filter(Boolean);
   }
-  for (let i = 0; i < urls.length; i += 1) {
-    if (!used.has(i) && urls[i]) {
-      sorted.push(urls[i]);
-    }
-  }
-  return sorted;
+
+  mapped.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    return a.index - b.index;
+  });
+
+  return mapped.map((item) => item.url);
 }
 
 function pickTargetChapter(
@@ -322,6 +322,12 @@ type MappedEpItem = {
   name: string;
   order: number;
   extern: Record<string, unknown>;
+};
+
+type CachedChapterContent = {
+  name: string;
+  contents: ChapterContentItem[];
+  words: number[];
 };
 
 function buildChapterCacheKey(comicId: string, groups: DetailApiGroup[]) {
@@ -367,6 +373,91 @@ async function writeChapterCache(cacheKey: string, eps: MappedEpItem[]) {
   } catch {
     // ignore cache write errors
   }
+}
+
+function buildChapterContentCacheKey(comicId: string, chapterId: string) {
+  return `copyComic:chapterContent:v1:${comicId}:${chapterId}`;
+}
+
+async function readChapterContentCache(
+  comicId: string,
+  chapterId: string,
+): Promise<CachedChapterContent | null> {
+  try {
+    const raw = await cache.get(
+      buildChapterContentCacheKey(comicId, chapterId),
+      null,
+    );
+    const data = toStringMap(raw);
+    const ts = Number(data.ts ?? 0);
+    if (!Number.isFinite(ts) || ts <= 0) return null;
+    if (Date.now() - ts > CHAPTER_CACHE_TTL_MS) return null;
+
+    const chapter = toStringMap(data.chapter);
+    const name = String(chapter.name ?? "").trim();
+    const contents = (Array.isArray(chapter.contents) ? chapter.contents : [])
+      .map((item) => toStringMap(item))
+      .map((item) => ({ url: String(item.url ?? "").trim() }))
+      .filter((item) => item.url);
+    const words = Array.isArray(chapter.words)
+      ? chapter.words.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      : [];
+
+    if (contents.length === 0) return null;
+    return { name, contents, words };
+  } catch {
+    return null;
+  }
+}
+
+async function writeChapterContentCache(
+  comicId: string,
+  chapterId: string,
+  chapter: CachedChapterContent,
+) {
+  try {
+    await cache.set(buildChapterContentCacheKey(comicId, chapterId), {
+      ts: Date.now(),
+      chapter,
+    });
+  } catch {
+    // ignore cache write errors
+  }
+}
+
+async function getChapterContentWithCache(
+  comicId: string,
+  chapterId: string,
+  headers: Record<string, string>,
+) {
+  const cached = await readChapterContentCache(comicId, chapterId);
+  if (cached) return cached;
+
+  const chapterParams = new URLSearchParams({
+    platform: "1",
+  });
+  const chapterUrl = `${API_BASE}/comic/${encodeURIComponent(comicId)}/chapter2/${encodeURIComponent(chapterId)}?${chapterParams.toString()}`;
+  const chapterResp = await fetchCopyApiWithHeaders<ChapterContentResult>(
+    chapterUrl,
+    headers,
+  );
+  const chapterNode = toStringMap(chapterResp.results);
+  const chapterInfo = toStringMap(chapterNode.chapter) as ChapterContentInfo;
+  const contents = (
+    Array.isArray(chapterInfo.contents) ? chapterInfo.contents : []
+  ) as ChapterContentItem[];
+  const words = Array.isArray(chapterInfo.words)
+    ? chapterInfo.words.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+    : [];
+  const result: CachedChapterContent = {
+    name: String(chapterInfo.name ?? "").trim(),
+    contents,
+    words,
+  };
+  if (result.contents.length > 0) {
+    await writeChapterContentCache(comicId, chapterId, result);
+  }
+  return result;
 }
 
 async function fetchAllGroupChapters(
@@ -738,20 +829,15 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
   if (localToken) {
     headers.authorization = `Token ${localToken}`;
   }
-  const chapterParams = new URLSearchParams({
-    platform: "1",
-  });
-  const chapterUrl = `${API_BASE}/comic/${encodeURIComponent(comicId)}/chapter2/${encodeURIComponent(chapterId)}?${chapterParams.toString()}`;
-  const chapterResp = await fetchCopyApiWithHeaders<ChapterContentResult>(
-    chapterUrl,
+  const chapterContent = await getChapterContentWithCache(
+    comicId,
+    chapterId,
     headers,
   );
-  const chapterNode = toStringMap(chapterResp.results);
-  const chapterInfo = toStringMap(chapterNode.chapter) as ChapterContentInfo;
-  const contentList = (
-    Array.isArray(chapterInfo.contents) ? chapterInfo.contents : []
-  ) as ChapterContentItem[];
-  const imageUrls = sortChapterImageUrls(contentList, chapterInfo.words);
+  const imageUrls = sortChapterImageUrls(
+    chapterContent.contents,
+    chapterContent.words,
+  );
   const pages = imageUrls.map((imageUrl, index) => {
     const name = extractImageName(imageUrl, index);
     return {
@@ -814,10 +900,7 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
       },
       chapter: {
         id: chapterId,
-        name:
-          String(chapterInfo.name ?? "").trim() ||
-          targetChapter.name ||
-          `章节 ${chapterId}`,
+        name: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
         order: targetChapter.order,
         pages,
         extern: targetChapter.extern,
@@ -864,20 +947,15 @@ async function getChapter(payload: ChapterPayload = {}) {
   if (localToken) {
     headers.authorization = `Token ${localToken}`;
   }
-  const chapterParams = new URLSearchParams({
-    platform: "1",
-  });
-  const chapterUrl = `${API_BASE}/comic/${encodeURIComponent(comicId)}/chapter2/${encodeURIComponent(chapterId)}?${chapterParams.toString()}`;
-  const chapterResp = await fetchCopyApiWithHeaders<ChapterContentResult>(
-    chapterUrl,
+  const chapterContent = await getChapterContentWithCache(
+    comicId,
+    chapterId,
     headers,
   );
-  const chapterNode = toStringMap(chapterResp.results);
-  const chapterInfo = toStringMap(chapterNode.chapter) as ChapterContentInfo;
-  const contentList = (
-    Array.isArray(chapterInfo.contents) ? chapterInfo.contents : []
-  ) as ChapterContentItem[];
-  const imageUrls = sortChapterImageUrls(contentList, chapterInfo.words);
+  const imageUrls = sortChapterImageUrls(
+    chapterContent.contents,
+    chapterContent.words,
+  );
   const docs = imageUrls.map((imageUrl, index) => {
     const name = extractImageName(imageUrl, index);
     const path = `comic/${comicId}/${chapterId}/${name}`;
@@ -900,10 +978,7 @@ async function getChapter(payload: ChapterPayload = {}) {
 
   const chapter = {
     epId: chapterId,
-    epName:
-      String(chapterInfo.name ?? "").trim() ||
-      targetChapter.name ||
-      `章节 ${chapterId}`,
+    epName: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
     length: docs.length,
     epPages: String(docs.length),
     docs,
