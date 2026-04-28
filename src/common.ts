@@ -12,12 +12,12 @@ export function toStringMap(value: unknown): Record<string, unknown> {
 export function createActionItem(
   name: unknown,
   onTap: Record<string, unknown> = {},
-  extension: Record<string, unknown> = {},
+  extern: Record<string, unknown> = {},
 ) {
   return {
     name: String(name ?? ""),
     onTap,
-    extension,
+    extern,
   };
 }
 
@@ -27,7 +27,7 @@ export function createImage(
     url?: unknown;
     name?: unknown;
     path?: unknown;
-    extension?: Record<string, unknown>;
+    extern?: Record<string, unknown>;
   } = {},
 ) {
   return {
@@ -35,7 +35,7 @@ export function createImage(
     url: String(input.url ?? "").trim() || NOT_FOUND_IMAGE_URL,
     name: String(input.name ?? ""),
     path: String(input.path ?? "").trim() || PLACEHOLDER_IMAGE_PATH,
-    extension: input.extension ?? {},
+    extern: input.extern ?? {},
   };
 }
 
@@ -87,7 +87,7 @@ export function createComicItem(id: string, title: string) {
       url: NOT_FOUND_IMAGE_URL,
       path,
       name: "",
-      extension: { path },
+      extern: { path },
     },
     metadata: [
       createBasicMetadata("author", "作者", ["example-author"]),
@@ -120,7 +120,7 @@ export function createComicItem(id: string, title: string) {
       actors: [],
       related_list: [],
     },
-    extension: {},
+    extern: {},
   };
 }
 

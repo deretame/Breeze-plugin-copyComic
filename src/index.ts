@@ -11,7 +11,7 @@ import { buildPluginInfo } from "./get-info";
 import { cache, pluginConfig, runtime } from "./tools";
 
 type BasePayload = {
-  extension?: Record<string, unknown>;
+  extern?: Record<string, unknown>;
 };
 
 type SearchPayload = BasePayload & {
@@ -31,7 +31,7 @@ type ChapterPayload = BasePayload & {
 type ReadSnapshotPayload = {
   comicId?: string;
   chapterId?: string;
-  extension?: Record<string, unknown>;
+  extern?: Record<string, unknown>;
 };
 
 type FetchImagePayload = {
@@ -151,7 +151,7 @@ function openSearchAction(keyword: string) {
     payload: {
       source: PLUGIN_ID,
       keyword,
-      extension: {},
+      extern: {},
     },
   };
 }
@@ -294,16 +294,14 @@ function pickTargetChapter(
     id: string;
     name: string;
     order: number;
-    extension: Record<string, unknown>;
+    extern: Record<string, unknown>;
   }>,
   chapterIdInput: unknown,
   externInput: unknown,
 ) {
   const chapterIdText = String(chapterIdInput ?? "").trim();
-  const extension = toStringMap(externInput);
-  const externSort = Number(
-    extension.sort ?? extension.order ?? extension.index ?? 0,
-  );
+  const extern = toStringMap(externInput);
+  const externSort = Number(extern.sort ?? extern.order ?? extern.index ?? 0);
   const chapterIdAsNumber = Number(chapterIdText);
 
   const byId = eps.find((item) => item.id === chapterIdText);
@@ -323,7 +321,7 @@ type MappedEpItem = {
   id: string;
   name: string;
   order: number;
-  extension: Record<string, unknown>;
+  extern: Record<string, unknown>;
 };
 
 function buildChapterCacheKey(comicId: string, groups: DetailApiGroup[]) {
@@ -351,7 +349,7 @@ async function readChapterCache(
         id: String(item.id ?? "").trim(),
         name: String(item.name ?? "").trim(),
         order: Number(item.order ?? 0) || 0,
-        extension: toStringMap(item.extension),
+        extern: toStringMap(item.extern),
       }))
       .filter((item) => item.id);
     return mapped;
@@ -378,12 +376,6 @@ async function fetchAllGroupChapters(
   const cacheKey = buildChapterCacheKey(comicId, groups);
   const cached = await readChapterCache(cacheKey);
   if (cached && cached.length > 0) {
-    console.log("[copyComic.detail] chapters cache hit:", {
-      comicId,
-      cacheKey,
-      epsCount: cached.length,
-      tsMs: Date.now(),
-    });
     return cached;
   }
 
@@ -400,11 +392,6 @@ async function fetchAllGroupChapters(
     });
     const apiUrl = `${API_BASE}/comic/${encodeURIComponent(comicId)}/group/${encodeURIComponent(groupPathWord)}/chapters?${params.toString()}`;
     const chapterResp = await fetchCopyApi<ChapterApiData>(apiUrl);
-    console.log("[copyComic.detail] chapters response:", chapterResp, {
-      comicId,
-      groupPathWord,
-      tsMs: Date.now(),
-    });
     const chapterData = toStringMap(chapterResp.results);
     const chapterList = (
       Array.isArray(chapterData.list) ? chapterData.list : []
@@ -419,7 +406,7 @@ async function fetchAllGroupChapters(
         id: chapterId,
         name: groupName ? `${groupName} - ${chapterName}` : chapterName,
         order,
-        extension: {
+        extern: {
           sort: order,
           groupPathWord,
           groupName,
@@ -431,21 +418,9 @@ async function fetchAllGroupChapters(
       });
       order += 1;
     }
-    console.log("[copyComic.detail] chapters mapped:", {
-      comicId,
-      groupPathWord,
-      count: chapterList.length,
-      tsMs: Date.now(),
-    });
   }
 
   await writeChapterCache(cacheKey, list);
-  console.log("[copyComic.detail] chapters cache write:", {
-    comicId,
-    cacheKey,
-    epsCount: list.length,
-    tsMs: Date.now(),
-  });
   return list;
 }
 
@@ -488,7 +463,7 @@ function mapSearchComicToGrid(item: SearchApiComic) {
       url: coverUrl || NOT_FOUND_IMAGE_URL,
       path,
       name: `${comicId}.jpg`,
-      extension: { path },
+      extern: { path },
     },
     metadata: [
       createBasicMetadata("author", "作者", authorNames),
@@ -503,7 +478,7 @@ function mapSearchComicToGrid(item: SearchApiComic) {
       createBasicMetadata("actors", "角色", []),
     ],
     raw: item,
-    extension: {
+    extern: {
       comicId,
       pathWord: comicId,
     },
@@ -511,9 +486,9 @@ function mapSearchComicToGrid(item: SearchApiComic) {
 }
 
 async function searchComic(payload: SearchPayload = {}) {
-  const extension = toStringMap(payload.extension);
+  const extern = toStringMap(payload.extern);
   const page = Math.max(1, Number(payload.page ?? 1) || 1);
-  const keyword = String(payload.keyword ?? extension.keyword ?? "").trim();
+  const keyword = String(payload.keyword ?? extern.keyword ?? "").trim();
   if (!keyword) {
     throw new Error("keyword 不能为空");
   }
@@ -557,7 +532,7 @@ async function searchComic(payload: SearchPayload = {}) {
 
   return {
     source: PLUGIN_ID,
-    extension: payload.extension ?? null,
+    extern: payload.extern ?? null,
     scheme: {
       version: "1.0.0",
       type: "searchResult",
@@ -583,10 +558,6 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
   });
   const detailUrl = `${API_BASE}/comic2/${encodeURIComponent(comicId)}?${params.toString()}`;
   const detailResp = await fetchCopyApi<DetailApiResult>(detailUrl);
-  console.log("[copyComic.detail] detail response:", detailResp, {
-    comicId,
-    tsMs: Date.now(),
-  });
   const result = toStringMap(detailResp.results) as DetailApiResult;
   const detail = toStringMap(result.comic) as DetailApiComic;
 
@@ -604,19 +575,8 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
     String(detail.status?.display ?? "").trim() ||
     String(detail.status?.value ?? "").trim();
   const groups = normalizeGroups(result.groups ?? detail.groups);
-  console.log("[copyComic.detail] groups parsed:", {
-    comicId,
-    groupCount: groups.length,
-    groups,
-    tsMs: Date.now(),
-  });
 
   const eps = await fetchAllGroupChapters(comicId, groups);
-  console.log("[copyComic.detail] eps mapped:", {
-    comicId,
-    epsCount: eps.length,
-    tsMs: Date.now(),
-  });
   const updateText = formatDateTime(detail.datetime_updated);
   const title = String(detail.name ?? "").trim() || comicId;
   const coverUrl = String(detail.cover ?? "").trim();
@@ -655,10 +615,10 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
           url: NOT_FOUND_IMAGE_URL,
           name: "",
           path: "",
-          extension: {},
+          extern: {},
         }),
         onTap: {},
-        extension: {},
+        extern: {},
       },
       description: String(detail.brief ?? ""),
       cover: createImage({
@@ -666,7 +626,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
         url: coverUrl || NOT_FOUND_IMAGE_URL,
         name: `${comicId}.jpg`,
         path: `comic/${comicId}/cover.jpg`,
-        extension: {},
+        extern: {},
       }),
       metadata: [
         createMetadataActionList("author", "作者", authorNames),
@@ -701,7 +661,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
         const value = toStringMap(meta).value;
         return Array.isArray(value) && value.length > 0;
       }),
-      extension: {},
+      extern: {},
     },
     eps,
     recommend: [],
@@ -714,7 +674,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
     allowLike: false,
     allowCollected: false,
     allowDownload: true,
-    extension: {},
+    extern: {},
   };
 
   const scheme = {
@@ -731,12 +691,10 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
     },
   };
 
-  console.log("detail data:", data);
-
   return {
     source: PLUGIN_ID,
     comicId,
-    extension: payload.extension ?? null,
+    extern: payload.extern ?? null,
     scheme,
     data,
   };
@@ -747,14 +705,14 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
   if (!comicId) {
     throw new Error("comicId 不能为空");
   }
-  const extension = toStringMap(payload.extension);
+  const extern = toStringMap(payload.extern);
   const inputChapterId = String(
-    payload.chapterId ?? extension.chapterId ?? "",
+    payload.chapterId ?? extern.chapterId ?? "",
   ).trim();
 
   const detail = await getComicDetail({
     comicId,
-    extension: payload.extension,
+    extern: payload.extern,
   });
   const normal = toStringMap(toStringMap(detail.data).normal);
   const comicInfo = toStringMap(normal.comicInfo);
@@ -764,13 +722,13 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
       id: String(item.id ?? "").trim(),
       name: String(item.name ?? "").trim(),
       order: Number(item.order ?? 0) || 0,
-      extension: toStringMap(item.extension),
+      extern: toStringMap(item.extern),
     }))
     .filter((item) => item.id);
   if (eps.length === 0) {
     throw new Error("未找到可阅读章节");
   }
-  const targetChapter = pickTargetChapter(eps, inputChapterId, extension);
+  const targetChapter = pickTargetChapter(eps, inputChapterId, extern);
   const chapterId = targetChapter.id;
 
   const headers: Record<string, string> = {
@@ -788,12 +746,6 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
     chapterUrl,
     headers,
   );
-  console.log("[copyComic.read] chapter response:", chapterResp, {
-    comicId,
-    chapterId,
-    hasToken: Boolean(localToken),
-    tsMs: Date.now(),
-  });
   const chapterNode = toStringMap(chapterResp.results);
   const chapterInfo = toStringMap(chapterNode.chapter) as ChapterContentInfo;
   const contentList = (
@@ -807,7 +759,7 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
       name,
       path: `comic/${comicId}/${chapterId}/${name}`,
       url: imageUrl,
-      extension: {
+      extern: {
         index: index + 1,
         comicId,
         chapterId,
@@ -823,8 +775,8 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
     id: item.id,
     name: item.name || `章节 ${item.id}`,
     order: item.order,
-    extension: {
-      ...item.extension,
+    extern: {
+      ...item.extern,
       comicId,
       chapterId: item.id,
       order: item.order,
@@ -833,7 +785,7 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
 
   return {
     source: PLUGIN_ID,
-    extension: payload.extension ?? null,
+    extern: payload.extern ?? null,
     data: {
       comic: {
         id: String(comicInfo.id ?? comicId),
@@ -842,23 +794,23 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
         description: String(comicInfo.description ?? ""),
         cover: {
           ...toStringMap(comicInfo.cover),
-          extension: toStringMap(toStringMap(comicInfo.cover).extension),
+          extern: toStringMap(toStringMap(comicInfo.cover).extern),
         },
         creator: {
           ...toStringMap(comicInfo.creator),
           avatar: {
             ...toStringMap(toStringMap(comicInfo.creator).avatar),
-            extension: toStringMap(
-              toStringMap(toStringMap(comicInfo.creator).avatar).extension,
+            extern: toStringMap(
+              toStringMap(toStringMap(comicInfo.creator).avatar).extern,
             ),
           },
-          extension: toStringMap(toStringMap(comicInfo.creator).extension),
+          extern: toStringMap(toStringMap(comicInfo.creator).extern),
         },
         titleMeta: Array.isArray(comicInfo.titleMeta)
           ? comicInfo.titleMeta
           : [],
         metadata: Array.isArray(comicInfo.metadata) ? comicInfo.metadata : [],
-        extension: toStringMap(comicInfo.extension),
+        extern: toStringMap(comicInfo.extern),
       },
       chapter: {
         id: chapterId,
@@ -868,7 +820,7 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
           `章节 ${chapterId}`,
         order: targetChapter.order,
         pages,
-        extension: targetChapter.extension,
+        extern: targetChapter.extern,
       },
       chapters,
     },
@@ -876,11 +828,10 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}) {
 }
 
 async function getChapter(payload: ChapterPayload = {}) {
-  console.log("[copyComic.getChapter] payload:", payload, { tsMs: Date.now() });
-  const extension = toStringMap(payload.extension);
-  const comicId = String(payload.comicId ?? extension.comicId ?? "").trim();
+  const extern = toStringMap(payload.extern);
+  const comicId = String(payload.comicId ?? extern.comicId ?? "").trim();
   const inputChapterId = String(
-    payload.chapterId ?? extension.chapterId ?? "",
+    payload.chapterId ?? extern.chapterId ?? "",
   ).trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -888,7 +839,7 @@ async function getChapter(payload: ChapterPayload = {}) {
 
   const detail = await getComicDetail({
     comicId,
-    extension: payload.extension,
+    extern: payload.extern,
   });
   const normal = toStringMap(toStringMap(detail.data).normal);
   const eps = (Array.isArray(normal.eps) ? normal.eps : [])
@@ -897,22 +848,14 @@ async function getChapter(payload: ChapterPayload = {}) {
       id: String(item.id ?? "").trim(),
       name: String(item.name ?? "").trim(),
       order: Number(item.order ?? 0) || 0,
-      extension: toStringMap(item.extension),
+      extern: toStringMap(item.extern),
     }))
     .filter((item) => item.id);
   if (eps.length === 0) {
     throw new Error("未找到可下载章节");
   }
-  const targetChapter = pickTargetChapter(eps, inputChapterId, extension);
+  const targetChapter = pickTargetChapter(eps, inputChapterId, extern);
   const chapterId = targetChapter.id;
-  console.log("[copyComic.getChapter] pick target:", {
-    comicId,
-    inputChapterId,
-    targetChapterId: chapterId,
-    targetOrder: targetChapter.order,
-    targetName: targetChapter.name,
-    tsMs: Date.now(),
-  });
 
   const headers: Record<string, string> = {
     ...getApiHeaders(),
@@ -943,7 +886,7 @@ async function getChapter(payload: ChapterPayload = {}) {
       name,
       path,
       url: imageUrl,
-      extension: {
+      extern: {
         index: index + 1,
         comicId,
         chapterId,
@@ -968,8 +911,8 @@ async function getChapter(payload: ChapterPayload = {}) {
       id: item.id,
       name: item.name || `章节 ${item.id}`,
       order: item.order,
-      extension: {
-        ...item.extension,
+      extern: {
+        ...item.extern,
         comicId,
         chapterId: item.id,
         order: item.order,
@@ -981,7 +924,7 @@ async function getChapter(payload: ChapterPayload = {}) {
     source: PLUGIN_ID,
     comicId,
     chapterId,
-    extension: payload.extension ?? null,
+    extern: payload.extern ?? null,
     scheme: {
       version: "1.0.0",
       type: "chapterContent",
@@ -1052,14 +995,14 @@ async function getSettingsBundle() {
       version: "1.0.0",
       type: "settings",
       sections: [
-        {
-          id: "account",
-          title: "账号",
-          fields: [
-            { key: "auth.account", kind: "text", label: "用户名" },
-            { key: "auth.password", kind: "password", label: "密码" },
-          ],
-        },
+        // {
+        //   id: "account",
+        //   title: "账号",
+        //   fields: [
+        //     { key: "auth.account", kind: "text", label: "用户名" },
+        //     { key: "auth.password", kind: "password", label: "密码" },
+        //   ],
+        // },
       ],
     },
     data: {

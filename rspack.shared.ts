@@ -45,7 +45,7 @@ export function createRspackConfig({
       ],
     },
     resolve: {
-      extens: [".ts", ".tsx", ".mjs", ".js", ".json"],
+      extensions: [".ts", ".tsx", ".mjs", ".js", ".json"],
     },
     output: {
       path: outPath,
