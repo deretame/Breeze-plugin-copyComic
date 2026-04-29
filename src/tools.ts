@@ -24,9 +24,11 @@ export const pluginConfig = {
 
 export const runtime = {
   gc: () => bridge.call("runtime.gc") as Promise<void>,
-  native: {
-    put: (input: Uint8Array) => bridge.call("native.put", input) as Promise<number>,
-  },
+  isTaskGroupCancelled: (taskGroupKey: string) =>
+    bridge.call(
+      "runtime.is_task_group_cancelled",
+      taskGroupKey,
+    ) as Promise<boolean>,
 };
 
 interface ToastOptions {

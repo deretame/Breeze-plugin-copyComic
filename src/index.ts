@@ -37,6 +37,8 @@ type ReadSnapshotPayload = {
 type FetchImagePayload = {
   url?: string;
   timeoutMs?: number;
+  taskGroupKey?: string;
+  extern?: Record<string, unknown>;
 };
 
 type CopyApiResponse<T> = {
@@ -144,6 +146,12 @@ const API_BASE = "https://api.2025copy.com/api/v3";
 const SEARCH_PAGE_SIZE = 20;
 const CHAPTER_CACHE_TTL_MS = 1000 * 60 * 10;
 const AUTH_TOKEN_CONFIG_KEY = "auth.token";
+const GET_CHAPTER_REQUESTS_PER_MINUTE = 10;
+const FETCH_IMAGE_REQUESTS_PER_MINUTE = 20;
+const GET_CHAPTER_MAX_CONCURRENT = 2;
+const FETCH_IMAGE_MAX_CONCURRENT = 4;
+const RATE_LIMIT_WAIT_CHUNK_MS = 250;
+const DOWNLOAD_CANCELLED_MESSAGE = "__DOWNLOAD_TASK_CANCELLED__";
 
 function openSearchAction(keyword: string) {
   return {
@@ -330,6 +338,197 @@ type CachedChapterContent = {
   words: number[];
 };
 
+type CachedGetChapterResult = {
+  chapter: Record<string, unknown>;
+};
+async function isTaskGroupCancelled(taskGroupKey: string) {
+  const key = String(taskGroupKey ?? "").trim();
+  if (!key) return false;
+  try {
+    return Boolean(await runtime.isTaskGroupCancelled(key));
+  } catch {
+    return false;
+  }
+}
+
+function createRateLimiter(
+  name: string,
+  maxPerMinute: number,
+  maxConcurrent: number,
+) {
+  const queue: Array<{
+    run: () => void;
+    priority: number;
+    taskGroupKey: string;
+  }> = [];
+  const timestamps: number[] = [];
+  let running = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let minuteStartedAt = Date.now();
+  let minutePassedCount = 0;
+  const sharedWindowKey = `copyComic:rateWindow:v1:${name}`;
+  let sharedRecentCount = 0;
+
+  const rotateMinuteWindowIfNeeded = () => {
+    const now = Date.now();
+    if (now - minuteStartedAt < 60_000) return false;
+    minuteStartedAt = now;
+    minutePassedCount = 0;
+    return true;
+  };
+
+  const logState = (event: string) => {
+    const now = Date.now();
+    rotateMinuteWindowIfNeeded();
+    console.log(
+      `[rate-limit:${name}] event=${event} tsMs=${now} minutePassed=${minutePassedCount} running=${running} queued=${queue.length} sharedRecent=${sharedRecentCount}/${maxPerMinute} maxConcurrent=${maxConcurrent}`,
+    );
+  };
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.max(1, Math.min(ms, RATE_LIMIT_WAIT_CHUNK_MS))),
+    );
+
+  const acquireSharedMinutePermit = async (taskGroupKey: string) => {
+    // Use plugin cache as shared state so the minute quota survives per-request runtime isolation.
+    for (;;) {
+      if (taskGroupKey && (await isTaskGroupCancelled(taskGroupKey))) {
+        throw new Error(DOWNLOAD_CANCELLED_MESSAGE);
+      }
+      const now = Date.now();
+      let timestamps: number[] = [];
+      try {
+        const raw = await cache.get(sharedWindowKey, null);
+        const data = toStringMap(raw);
+        timestamps = Array.isArray(data.ts)
+          ? data.ts.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+          : [];
+      } catch {
+        timestamps = [];
+      }
+
+      const valid = timestamps
+        .filter((t) => now - t < 60_000)
+        .sort((a, b) => a - b);
+      sharedRecentCount = valid.length;
+      if (valid.length < maxPerMinute) {
+        valid.push(now);
+        sharedRecentCount = valid.length;
+        try {
+          await cache.set(sharedWindowKey, { ts: valid });
+        } catch {
+          // If cache write fails, fallback to in-memory behavior for this request.
+        }
+        return;
+      }
+
+      const waitMs = Math.max(1, 60_000 - (now - valid[0]));
+      logState(`shared_throttled_wait_${waitMs}ms`);
+      await sleep(waitMs);
+    }
+  };
+
+  const clearExpired = () => {
+    const now = Date.now();
+    while (timestamps.length > 0 && now - timestamps[0] >= 60_000) {
+      timestamps.shift();
+    }
+  };
+
+  const schedulePump = (waitMs: number) => {
+    if (timer) return;
+    timer = setTimeout(
+      () => {
+        timer = undefined;
+        pump();
+      },
+      Math.max(1, waitMs),
+    );
+  };
+
+  const pump = () => {
+    rotateMinuteWindowIfNeeded();
+    clearExpired();
+    while (queue.length > 0 && running < maxConcurrent) {
+      if (timestamps.length >= maxPerMinute) {
+        const waitMs = Math.max(1, 60_000 - (Date.now() - timestamps[0]));
+        logState(`throttled_wait_${waitMs}ms`);
+        schedulePump(Math.min(waitMs, RATE_LIMIT_WAIT_CHUNK_MS));
+        return;
+      }
+
+      const next = queue.shift();
+      if (!next) break;
+      running += 1;
+      logState("dequeue_run");
+      Promise.resolve()
+        .then(async () => {
+          if (
+            next.taskGroupKey &&
+            (await isTaskGroupCancelled(next.taskGroupKey))
+          ) {
+            throw new Error(DOWNLOAD_CANCELLED_MESSAGE);
+          }
+          await acquireSharedMinutePermit(next.taskGroupKey);
+          timestamps.push(Date.now());
+          minutePassedCount += 1;
+          logState("permit_granted");
+          next.run();
+        })
+        .catch(() => {
+          running -= 1;
+          pump();
+        });
+    }
+  };
+
+  return async function limit<T>(
+    task: () => Promise<T>,
+    options: { priority?: number; taskGroupKey?: string } = {},
+  ): Promise<T> {
+    const taskGroupKey = String(options.taskGroupKey ?? "").trim();
+    if (taskGroupKey && (await isTaskGroupCancelled(taskGroupKey))) {
+      throw new Error(DOWNLOAD_CANCELLED_MESSAGE);
+    }
+    return new Promise<T>((resolve, reject) => {
+      logState("enqueue_before");
+      const item = {
+        priority: Number(options.priority ?? 1),
+        taskGroupKey,
+        run: () => {
+          logState("task_start");
+          task()
+            .then(resolve, reject)
+            .finally(() => {
+              running -= 1;
+              logState("task_end");
+              pump();
+            });
+        },
+      };
+      if (item.priority <= 0) {
+        queue.unshift(item);
+      } else {
+        queue.push(item);
+      }
+      logState("enqueue_after");
+      pump();
+    });
+  };
+}
+
+const limitGetChapter = createRateLimiter(
+  "getChapter",
+  GET_CHAPTER_REQUESTS_PER_MINUTE,
+  GET_CHAPTER_MAX_CONCURRENT,
+);
+const limitFetchImage = createRateLimiter(
+  "fetchImageBytes",
+  FETCH_IMAGE_REQUESTS_PER_MINUTE,
+  FETCH_IMAGE_MAX_CONCURRENT,
+);
+
 function buildChapterCacheKey(comicId: string, groups: DetailApiGroup[]) {
   const groupKey = groups
     .map((group) => String(group.path_word ?? "").trim())
@@ -417,6 +616,48 @@ async function writeChapterContentCache(
 ) {
   try {
     await cache.set(buildChapterContentCacheKey(comicId, chapterId), {
+      ts: Date.now(),
+      chapter,
+    });
+  } catch {
+    // ignore cache write errors
+  }
+}
+
+function buildGetChapterCacheKey(comicId: string, chapterId: string) {
+  return `copyComic:getChapter:v1:${comicId}:${chapterId}`;
+}
+
+async function readGetChapterCache(
+  comicId: string,
+  chapterId: string,
+): Promise<CachedGetChapterResult | null> {
+  try {
+    const raw = await cache.get(
+      buildGetChapterCacheKey(comicId, chapterId),
+      null,
+    );
+    const data = toStringMap(raw);
+    const ts = Number(data.ts ?? 0);
+    if (!Number.isFinite(ts) || ts <= 0) return null;
+    if (Date.now() - ts > CHAPTER_CACHE_TTL_MS) return null;
+    const chapter = toStringMap(data.chapter);
+    if (!chapter || !Array.isArray(chapter.docs) || chapter.docs.length === 0) {
+      return null;
+    }
+    return { chapter };
+  } catch {
+    return null;
+  }
+}
+
+async function writeGetChapterCache(
+  comicId: string,
+  chapterId: string,
+  chapter: Record<string, unknown>,
+) {
+  try {
+    await cache.set(buildGetChapterCacheKey(comicId, chapterId), {
       ts: Date.now(),
       chapter,
     });
@@ -577,6 +818,8 @@ function mapSearchComicToGrid(item: SearchApiComic) {
 }
 
 async function searchComic(payload: SearchPayload = {}) {
+  console.log("[searchComic] payload=", payload);
+  console.debug("time is ", new Date().toISOString());
   const extern = toStringMap(payload.extern);
   const page = Math.max(1, Number(payload.page ?? 1) || 1);
   const keyword = String(payload.keyword ?? extern.keyword ?? "").trim();
@@ -940,127 +1183,193 @@ async function getChapter(payload: ChapterPayload = {}) {
   const targetChapter = pickTargetChapter(eps, inputChapterId, extern);
   const chapterId = targetChapter.id;
 
-  const headers: Record<string, string> = {
-    ...getApiHeaders(),
-  };
-  const localToken = await loadAuthToken();
-  if (localToken) {
-    headers.authorization = `Token ${localToken}`;
-  }
-  const chapterContent = await getChapterContentWithCache(
-    comicId,
-    chapterId,
-    headers,
-  );
-  const imageUrls = sortChapterImageUrls(
-    chapterContent.contents,
-    chapterContent.words,
-  );
-  const docs = imageUrls.map((imageUrl, index) => {
-    const name = extractImageName(imageUrl, index);
-    const path = `comic/${comicId}/${chapterId}/${name}`;
+  const cached = await readGetChapterCache(comicId, chapterId);
+  if (cached) {
     return {
-      id: `${chapterId}-${index + 1}`,
-      name,
-      path,
-      url: imageUrl,
-      extern: {
-        index: index + 1,
+      source: PLUGIN_ID,
+      comicId,
+      chapterId,
+      extern: payload.extern ?? null,
+      scheme: {
+        version: "1.0.0",
+        type: "chapterContent",
+        source: PLUGIN_ID,
+      },
+      data: {
+        chapter: cached.chapter,
+      },
+      chapter: cached.chapter,
+    };
+  }
+
+  return limitGetChapter(async () => {
+    const recheckCached = await readGetChapterCache(comicId, chapterId);
+    if (recheckCached) {
+      return {
+        source: PLUGIN_ID,
         comicId,
         chapterId,
-        chapterOrder: targetChapter.order,
+        extern: payload.extern ?? null,
+        scheme: {
+          version: "1.0.0",
+          type: "chapterContent",
+          source: PLUGIN_ID,
+        },
+        data: {
+          chapter: recheckCached.chapter,
+        },
+        chapter: recheckCached.chapter,
+      };
+    }
+
+    const headers: Record<string, string> = {
+      ...getApiHeaders(),
+    };
+    const localToken = await loadAuthToken();
+    if (localToken) {
+      headers.authorization = `Token ${localToken}`;
+    }
+    const chapterContent = await getChapterContentWithCache(
+      comicId,
+      chapterId,
+      headers,
+    );
+    const imageUrls = sortChapterImageUrls(
+      chapterContent.contents,
+      chapterContent.words,
+    );
+    const docs = imageUrls.map((imageUrl, index) => {
+      const name = extractImageName(imageUrl, index);
+      const path = `comic/${comicId}/${chapterId}/${name}`;
+      return {
+        id: `${chapterId}-${index + 1}`,
+        name,
+        path,
+        url: imageUrl,
+        extern: {
+          index: index + 1,
+          comicId,
+          chapterId,
+          chapterOrder: targetChapter.order,
+        },
+      };
+    });
+    if (docs.length === 0) {
+      throw new Error("当前章节没有可下载图片");
+    }
+
+    const chapter = {
+      epId: chapterId,
+      epName: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
+      length: docs.length,
+      epPages: String(docs.length),
+      docs,
+      series: eps.map((item) => ({
+        id: item.id,
+        name: item.name || `章节 ${item.id}`,
+        order: item.order,
+        extern: {
+          ...item.extern,
+          comicId,
+          chapterId: item.id,
+          order: item.order,
+        },
+      })),
+    };
+
+    await writeGetChapterCache(comicId, chapterId, chapter);
+
+    return {
+      source: PLUGIN_ID,
+      comicId,
+      chapterId,
+      extern: payload.extern ?? null,
+      scheme: {
+        version: "1.0.0",
+        type: "chapterContent",
+        source: PLUGIN_ID,
       },
+      data: {
+        chapter,
+      },
+      chapter,
     };
   });
-  if (docs.length === 0) {
-    throw new Error("当前章节没有可下载图片");
-  }
-
-  const chapter = {
-    epId: chapterId,
-    epName: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
-    length: docs.length,
-    epPages: String(docs.length),
-    docs,
-    series: eps.map((item) => ({
-      id: item.id,
-      name: item.name || `章节 ${item.id}`,
-      order: item.order,
-      extern: {
-        ...item.extern,
-        comicId,
-        chapterId: item.id,
-        order: item.order,
-      },
-    })),
-  };
-
-  return {
-    source: PLUGIN_ID,
-    comicId,
-    chapterId,
-    extern: payload.extern ?? null,
-    scheme: {
-      version: "1.0.0",
-      type: "chapterContent",
-      source: PLUGIN_ID,
-    },
-    data: {
-      chapter,
-    },
-    chapter,
-  };
 }
 
 async function fetchImageBytes({
   url = "",
   timeoutMs = 30000,
+  taskGroupKey = "",
+  extern = {},
 }: FetchImagePayload = {}) {
-  const targetUrl = String(url).trim();
-  if (!targetUrl) {
-    throw new Error("url 不能为空");
+  const externMap = toStringMap(extern);
+  const priority = Number(externMap.priority ?? 1);
+  const resolvedTaskGroupKey = String(
+    taskGroupKey ||
+      externMap.taskGroupKey ||
+      externMap.qjsTaskGroupKey ||
+      externMap.comicId ||
+      "",
+  ).trim();
+  if (
+    resolvedTaskGroupKey &&
+    (await isTaskGroupCancelled(resolvedTaskGroupKey))
+  ) {
+    throw new Error(DOWNLOAD_CANCELLED_MESSAGE);
   }
+  return limitFetchImage(
+    async () => {
+      const targetUrl = String(url).trim();
+      if (!targetUrl) {
+        throw new Error("url 不能为空");
+      }
 
-  const controller =
-    typeof AbortController !== "undefined" ? new AbortController() : undefined;
-  const resolvedTimeout = Math.max(0, Number(timeoutMs) || 30000);
-  const timer = controller
-    ? setTimeout(() => {
-        controller.abort();
-      }, resolvedTimeout)
-    : undefined;
+      const controller =
+        typeof AbortController !== "undefined"
+          ? new AbortController()
+          : undefined;
+      const resolvedTimeout = Math.max(0, Number(timeoutMs) || 30000);
+      const timer = controller
+        ? setTimeout(() => {
+            controller.abort();
+          }, resolvedTimeout)
+        : undefined;
 
-  let response: Response;
-  try {
-    response = await fetch(targetUrl, {
-      method: "GET",
-      headers: {
-        ...getApiHeaders(),
-        Referer: "https://www.copymanga.tv/",
-        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "x-rquickjs-host-offload-binary-v1": "1",
-      },
-      signal: controller?.signal,
-    });
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+      let response: Response;
+      try {
+        response = await fetch(targetUrl, {
+          method: "GET",
+          headers: {
+            ...getApiHeaders(),
+            Referer: "https://www.copymanga.tv/",
+            Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "x-rquickjs-host-offload-binary-v1": "1",
+          },
+          signal: controller?.signal,
+        });
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
 
-  if (!response.ok) {
-    throw new Error(`图片请求失败(${response.status})`);
-  }
+      if (!response.ok) {
+        throw new Error(`图片请求失败(${response.status})`);
+      }
 
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength === 0) {
-    throw new Error("图片数据为空");
-  }
-  const nativeBufferId = await runtime.native.put(bytes);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength === 0) {
+        throw new Error("图片数据为空");
+      }
+      const nativeBufferId = await native.put(bytes);
 
-  return {
-    nativeBufferId: Number(nativeBufferId),
-  };
+      return {
+        nativeBufferId: Number(nativeBufferId),
+      };
+    },
+    { priority, taskGroupKey: resolvedTaskGroupKey },
+  );
 }
 
 async function getSettingsBundle() {

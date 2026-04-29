@@ -11,7 +11,7 @@ export function buildPluginInfo() {
       describe: "",
     },
     describe: "拷贝漫画插件",
-    version: "0.0.2",
+    version: "0.0.3",
     home: "https://github.com/deretame/Breeze-plugin-copyComic",
     updateUrl:
       "https://api.github.com/repos/deretame/Breeze-plugin-copyComic/releases/latest",
