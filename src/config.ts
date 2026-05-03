@@ -1,0 +1,11 @@
+export const API_BASE = "https://api.2025copy.com/api/v3";
+export const SEARCH_PAGE_SIZE = 20;
+export const CHAPTER_CACHE_TTL_MS = 1000 * 60 * 10;
+export const AUTH_TOKEN_CONFIG_KEY = "auth.token";
+export const GET_CHAPTER_REQUESTS_PER_MINUTE = 10;
+export const FETCH_IMAGE_REQUESTS_PER_MINUTE = 20;
+export const FETCH_IMAGE_PRIORITY_REQUESTS_PER_MINUTE = 10;
+export const GET_CHAPTER_MAX_CONCURRENT = 2;
+export const FETCH_IMAGE_MAX_CONCURRENT = 4;
+export const RATE_LIMIT_WAIT_CHUNK_MS = 250;
+export const DOWNLOAD_CANCELLED_MESSAGE = "__DOWNLOAD_TASK_CANCELLED__";

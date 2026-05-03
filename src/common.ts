@@ -58,11 +58,7 @@ export function createMetadataActionList(
   };
 }
 
-export function createBasicMetadata(
-  type: string,
-  name: string,
-  values: unknown,
-) {
+export function createBasicMetadata(type: string, name: string, values: unknown) {
   const list = Array.isArray(values) ? values : values == null ? [] : [values];
   return {
     type,

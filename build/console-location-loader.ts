@@ -1,14 +1,6 @@
 import ts from "typescript";
 
-const METHODS = new Set([
-  "log",
-  "info",
-  "warn",
-  "error",
-  "debug",
-  "table",
-  "dir",
-]);
+const METHODS = new Set(["log", "info", "warn", "error", "debug", "table", "dir"]);
 
 function toPosixPath(filePath: string): string {
   return String(filePath || "").replace(/\\/g, "/");
@@ -25,10 +17,7 @@ function findOpenParen(source: string, from: number, to: number): number {
   return -1;
 }
 
-function consoleLocationLoader(
-  this: { resourcePath: string },
-  source: string,
-): string {
+function consoleLocationLoader(this: { resourcePath: string }, source: string): string {
   const filePath = toPosixPath(this.resourcePath);
 
   if (!filePath.includes("/src/")) {
@@ -54,9 +43,7 @@ function consoleLocationLoader(
     ) {
       const method = node.expression.name.text;
       if (METHODS.has(method)) {
-        const lineInfo = sourceFile.getLineAndCharacterOfPosition(
-          node.getStart(sourceFile),
-        );
+        const lineInfo = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
         const line = lineInfo.line + 1;
         const column = lineInfo.character + 1;
         const location = `${filePath}:${line}:${column}`;
@@ -65,9 +52,7 @@ function consoleLocationLoader(
 
         if (openParen >= 0) {
           const insert =
-            node.arguments.length > 0
-              ? `${JSON.stringify(location)}, `
-              : JSON.stringify(location);
+            node.arguments.length > 0 ? `${JSON.stringify(location)}, ` : JSON.stringify(location);
           edits.push({ index: openParen + 1, text: insert });
         }
       }

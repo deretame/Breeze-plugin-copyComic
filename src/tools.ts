@@ -1,17 +1,11 @@
 export const cache = {
   get: (key: string, fallback: unknown = null): Promise<unknown> =>
     bridge.call("cache.get", key, fallback),
-  set: (key: string, value: unknown) =>
-    bridge.call("cache.set", key, value) as Promise<boolean>,
+  set: (key: string, value: unknown) => bridge.call("cache.set", key, value) as Promise<boolean>,
   setIfAbsent: (key: string, value: unknown) =>
     bridge.call("cache.set_if_absent", key, value) as Promise<boolean>,
   compareAndSet: (key: string, expected: unknown, next: unknown) =>
-    bridge.call(
-      "cache.compare_and_set",
-      key,
-      expected,
-      next,
-    ) as Promise<boolean>,
+    bridge.call("cache.compare_and_set", key, expected, next) as Promise<boolean>,
   delete: (key: string) => bridge.call("cache.delete", key) as Promise<boolean>,
 };
 
@@ -25,10 +19,7 @@ export const pluginConfig = {
 export const runtime = {
   gc: () => bridge.call("runtime.gc") as Promise<void>,
   isTaskGroupCancelled: (taskGroupKey: string) =>
-    bridge.call(
-      "runtime.is_task_group_cancelled",
-      taskGroupKey,
-    ) as Promise<boolean>,
+    bridge.call("runtime.is_task_group_cancelled", taskGroupKey) as Promise<boolean>,
 };
 
 interface ToastOptions {
@@ -41,9 +32,6 @@ interface ToastOptions {
 export const flutterTools = {
   getAppVersion: () => bridge.call("dart.getAppVersion") as Promise<string>,
   showToast: (options: ToastOptions) => {
-    return bridge.call(
-      "flutter.showToast",
-      JSON.stringify(options),
-    ) as Promise<string>;
+    return bridge.call("flutter.showToast", JSON.stringify(options)) as Promise<string>;
   },
 };

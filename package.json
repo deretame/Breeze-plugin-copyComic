@@ -6,16 +6,27 @@
   "packageManager": "pnpm@10.27.0",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier . --check",
+    "format:write": "prettier . --write",
     "build": "pnpm typecheck && node --import tsx build/generate-manifest.ts && cross-env NODE_OPTIONS=\"--import tsx\" rspack build && node --import tsx build/generate-brotli.ts",
     "dev": "pnpm dev:serve",
     "dev:serve": "tsx dev-server.ts"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@rspack/cli": "^2.0.0",
     "@rspack/core": "^2.0.0",
     "@types/node": "^25.6.0",
     "cross-env": "^10.1.0",
+    "eslint": "^10.3.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.6.0",
+    "ky": "^1.8.2",
+    "prettier": "^3.8.3",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.1"
   }
 }
