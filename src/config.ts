@@ -1,4 +1,4 @@
-export const API_BASE = "https://api.2025copy.com/api/v3";
+export const DEFAULT_API_BASE = "https://api.manga2025.com/api/v3";
 export const SEARCH_PAGE_SIZE = 20;
 export const CHAPTER_CACHE_TTL_MS = 1000 * 60 * 10;
 export const AUTH_TOKEN_CONFIG_KEY = "auth.token";

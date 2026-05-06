@@ -33,4 +33,11 @@ export default [
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  {
+    files: ["types/**/*.d.ts"],
+    rules: {
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+    },
+  },
 ];

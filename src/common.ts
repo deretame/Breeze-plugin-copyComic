@@ -128,3 +128,57 @@ export function createPaging(page = 1, total = 1) {
     hasReachedMax: true,
   };
 }
+
+type FieldKind = "text" | "password" | "switch" | "select" | "choice" | "multiChoice";
+
+type BaseField = {
+  key: string;
+  kind: FieldKind;
+  label: string;
+  fnPath?: string;
+  persist?: boolean;
+};
+
+type OptionField = BaseField & {
+  kind: "select" | "choice" | "multiChoice";
+  options?: Array<{ label: string; value: unknown }>;
+};
+
+type PlainField = BaseField & {
+  kind: "text" | "password" | "switch";
+};
+
+type SettingsField = OptionField | PlainField;
+
+export type SettingsBundleContract = {
+  source: string;
+  scheme: {
+    version: "1.0.0";
+    type: "settings";
+    sections: Array<{
+      id: string;
+      title: string;
+      fields: SettingsField[];
+    }>;
+  };
+  data: {
+    canShowUserInfo: boolean;
+    values: Record<string, unknown>;
+  };
+};
+
+type CapabilityAction = {
+  key?: string;
+  title: string;
+  fnPath: string;
+};
+
+export type CapabilitiesBundleContract = {
+  source: string;
+  scheme: {
+    version: "1.0.0";
+    type: "capabilities";
+    actions: CapabilityAction[];
+  };
+  data: Record<string, unknown>;
+};

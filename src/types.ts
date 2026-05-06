@@ -7,6 +7,21 @@ export type SearchPayload = BasePayload & {
   page?: number;
 };
 
+export type RecommendPayload = BasePayload & {
+  page?: number;
+};
+
+export type NewestPayload = BasePayload & {
+  page?: number;
+};
+
+export type RankPayload = BasePayload & {
+  page?: number;
+  audienceType?: "male" | "female";
+  dateType?: "day" | "week" | "month" | "total";
+  rankType?: 1 | 5;
+};
+
 export type ComicDetailPayload = BasePayload & {
   comicId?: string;
 };
@@ -49,6 +64,45 @@ export type SearchApiComic = {
 
 export type SearchApiData = {
   list?: SearchApiComic[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+};
+
+export type RecommendApiData = {
+  list?: Array<{ type?: number; comic?: SearchApiComic }>;
+  total?: number;
+  limit?: number;
+  offset?: number;
+};
+
+export type NewestApiData = {
+  list?: Array<{ name?: string; datetime_created?: string; comic?: SearchApiComic }>;
+  total?: number;
+  limit?: number;
+  offset?: number;
+};
+
+export type RankApiBook = {
+  name?: string;
+  path_word?: string;
+  cover?: string;
+  author?: Array<{ name?: string }>;
+  popular?: number;
+  theme?: Array<{ name?: string }>;
+};
+
+export type RankApiData = {
+  list?: Array<{
+    sort?: number;
+    sort_last?: number;
+    rise_sort?: number;
+    rise_num?: number;
+    date_type?: number;
+    popular?: number;
+    comic?: SearchApiComic;
+    book?: RankApiBook;
+  }>;
   total?: number;
   limit?: number;
   offset?: number;

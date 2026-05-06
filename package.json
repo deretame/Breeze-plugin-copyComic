@@ -23,7 +23,7 @@
     "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.6.0",
-    "ky": "^1.8.2",
+    "ky": "^2.0.2",
     "prettier": "^3.8.3",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
