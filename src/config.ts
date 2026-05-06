@@ -9,3 +9,5 @@ export const GET_CHAPTER_MAX_CONCURRENT = 2;
 export const FETCH_IMAGE_MAX_CONCURRENT = 4;
 export const RATE_LIMIT_WAIT_CHUNK_MS = 250;
 export const DOWNLOAD_CANCELLED_MESSAGE = "__DOWNLOAD_TASK_CANCELLED__";
+export const PLUGIN_ID = "b28da416-f2d4-4208-a85e-8b4c7c648e48";
+export const PLUGIN_VERSION = "0.0.6";

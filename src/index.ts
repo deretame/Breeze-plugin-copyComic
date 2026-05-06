@@ -1,7 +1,6 @@
 import ky from "ky";
 import {
   NOT_FOUND_IMAGE_URL,
-  PLUGIN_ID,
   SettingsBundleContract,
   createActionItem,
   createBasicMetadata,
@@ -18,6 +17,7 @@ import {
   FETCH_IMAGE_REQUESTS_PER_MINUTE,
   GET_CHAPTER_MAX_CONCURRENT,
   GET_CHAPTER_REQUESTS_PER_MINUTE,
+  PLUGIN_ID,
   RATE_LIMIT_WAIT_CHUNK_MS,
   SEARCH_PAGE_SIZE,
 } from "./config";
@@ -348,15 +348,7 @@ async function getInfo() {
 async function getApiHeaders() {
   const apiBase = await resolveApiBase();
   const platform = await resolvePlatformValue();
-  const apiHost = (() => {
-    try {
-      return new URL(apiBase).host.toLowerCase();
-    } catch {
-      return "";
-    }
-  })();
-  const isHotMangaApi =
-    apiHost.includes("hotmanga") || apiHost === "api.manga2025.com" || apiHost.includes("fgjfghkk");
+  const isHotMangaApi = isHotMangaApiBase(apiBase);
   const requestVersion = isHotMangaApi ? "2025.02.12" : "2025.05.09";
 
   const baseHeaders = {
@@ -392,6 +384,21 @@ async function getApiHeaders() {
     headers.platform = platform;
   }
   return headers;
+}
+
+function getApiHost(apiBase: string) {
+  try {
+    return new URL(apiBase).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isHotMangaApiBase(apiBase: string) {
+  const apiHost = getApiHost(apiBase);
+  return (
+    apiHost.includes("hotmanga") || apiHost === "api.manga2025.com" || apiHost.includes("fgjfghkk")
+  );
 }
 
 function createPagingInfo(page: number, pages: number, total: number) {
@@ -705,8 +712,27 @@ async function getChapterContentWithCache(
     platform: "1",
   });
   const apiBase = await resolveApiBase();
-  const chapterUrl = `${apiBase}/comic/${encodeURIComponent(comicId)}/chapter2/${encodeURIComponent(chapterId)}?${chapterParams.toString()}`;
-  const chapterResp = await fetchCopyApiWithHeaders<ChapterContentResult>(chapterUrl, headers);
+  const primaryChapterPath = isHotMangaApiBase(apiBase) ? "chapter" : "chapter2";
+  const secondaryChapterPath = primaryChapterPath === "chapter" ? "chapter2" : "chapter";
+  const buildChapterUrl = (chapterPath: string) =>
+    `${apiBase}/comic/${encodeURIComponent(comicId)}/${chapterPath}/${encodeURIComponent(chapterId)}?${chapterParams.toString()}`;
+
+  let chapterResp: CopyApiResponse<ChapterContentResult>;
+  try {
+    chapterResp = await fetchCopyApiWithHeaders<ChapterContentResult>(
+      buildChapterUrl(primaryChapterPath),
+      headers,
+    );
+  } catch (error) {
+    const status = Number((error as { response?: { status?: unknown } })?.response?.status ?? 0);
+    if (status !== 404) {
+      throw error;
+    }
+    chapterResp = await fetchCopyApiWithHeaders<ChapterContentResult>(
+      buildChapterUrl(secondaryChapterPath),
+      headers,
+    );
+  }
   const chapterNode = toStringMap(chapterResp.results);
   const chapterInfo = toStringMap(chapterNode.chapter) as ChapterContentInfo;
   const contents = (
@@ -896,14 +922,35 @@ async function getHomeNewest(payload: NewestPayload = {}) {
   const apiBase = await resolveApiBase();
   const page = Math.max(1, Number(payload.page ?? 1) || 1);
   const offset = (page - 1) * HOME_PAGE_SIZE;
-  const params = new URLSearchParams({
-    date: "",
+  const isHot = isHotMangaApiBase(apiBase);
+  const newestParams = new URLSearchParams({
     limit: String(HOME_PAGE_SIZE),
     offset: String(offset),
     platform: "3",
   });
-  const apiUrl = `${apiBase}/update/newest?${params.toString()}`;
-  const json = await fetchCopyApi<NewestApiData>(apiUrl);
+  const updateParams = new URLSearchParams({
+    limit: String(HOME_PAGE_SIZE),
+    offset: String(offset),
+    ordering: "-datetime_updated",
+    platform: "3",
+  });
+  const primaryUrl = isHot
+    ? `${apiBase}/comics?${updateParams.toString()}`
+    : `${apiBase}/update/newest?${newestParams.toString()}`;
+  const fallbackUrl = isHot
+    ? `${apiBase}/update/newest?${newestParams.toString()}`
+    : `${apiBase}/comics?${updateParams.toString()}`;
+
+  let json: CopyApiResponse<NewestApiData>;
+  try {
+    json = await fetchCopyApi<NewestApiData>(primaryUrl);
+  } catch (error) {
+    const status = Number((error as { response?: { status?: unknown } })?.response?.status ?? 0);
+    if (status !== 404) {
+      throw error;
+    }
+    json = await fetchCopyApi<NewestApiData>(fallbackUrl);
+  }
   const data = toStringMap(json.results);
   const list = Array.isArray(data.list) ? data.list : [];
   const items = list

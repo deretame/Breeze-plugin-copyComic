@@ -1,4 +1,5 @@
-export const PLUGIN_ID = "b28da416-f2d4-4208-a85e-8b4c7c648e48";
+import { PLUGIN_ID } from "./config";
+
 export const NOT_FOUND_IMAGE_URL = "";
 export const PLACEHOLDER_IMAGE_PATH = "placeholder/image-404.png";
 

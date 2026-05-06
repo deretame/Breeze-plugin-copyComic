@@ -1,4 +1,4 @@
-import { PLUGIN_ID } from "./common";
+import { PLUGIN_ID, PLUGIN_VERSION } from "./config";
 
 function buildManifestComicListScene(input: {
   title: string;
@@ -44,7 +44,7 @@ export function buildPluginInfo() {
       describe: "",
     },
     describe: "拷贝漫画插件",
-    version: "0.0.5",
+    version: PLUGIN_VERSION,
     home: "https://github.com/deretame/Breeze-plugin-copyComic",
     updateUrl: "https://api.github.com/repos/deretame/Breeze-plugin-copyComic/releases/latest",
     function: [
