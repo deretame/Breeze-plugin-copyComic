@@ -357,11 +357,12 @@ async function getApiHeaders() {
   })();
   const isHotMangaApi =
     apiHost.includes("hotmanga") || apiHost === "api.manga2025.com" || apiHost.includes("fgjfghkk");
+  const requestVersion = isHotMangaApi ? "2025.02.12" : "2025.05.09";
 
   const baseHeaders = {
     Accept: "application/json",
     "Accept-Language": "en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7",
-    version: "2025.11.21",
+    version: requestVersion,
     "sec-fetch-dest": "document",
     "sec-fetch-mode": "navigate",
     "sec-fetch-site": "same-origin",
