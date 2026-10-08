@@ -39,10 +39,6 @@ export function buildPluginInfo() {
     uuid: PLUGIN_ID,
     iconUrl:
       "https://raw.githubusercontent.com/deretame/Breeze-plugin-copyComic/main/assets/u3.webp",
-    creator: {
-      name: "",
-      describe: "",
-    },
     describe: "拷贝漫画插件",
     version: PLUGIN_VERSION,
     home: "https://github.com/deretame/Breeze-plugin-copyComic",

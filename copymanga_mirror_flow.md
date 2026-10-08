@@ -10,11 +10,11 @@
 
 镜像站所有数据均可在**不登录**的情况下获取，共 4 层：
 
-| 层级 | 方式 | 加密 |
-|------|------|------|
-| 1. 搜索 | JSON API | 无 |
-| 2. 详情 | SSR HTML（cheerio 解析） | 无 |
-| 3. 章节列表 | JSON API + AES-128-CBC | ✅ 响应加密 |
+| 层级        | 方式                                  | 加密        |
+| ----------- | ------------------------------------- | ----------- |
+| 1. 搜索     | JSON API                              | 无          |
+| 2. 详情     | SSR HTML（cheerio 解析）              | 无          |
+| 3. 章节列表 | JSON API + AES-128-CBC                | ✅ 响应加密 |
 | 4. 章节图片 | 阅读页内嵌 `contentKey` + AES-128-CBC | ✅ 数据加密 |
 
 通用请求头：
@@ -71,27 +71,27 @@ GET https://ios.2026copy.com/comic/{path_word}
 
 详情页为服务端渲染，直接解析 HTML：
 
-| 数据 | 选择器 / 位置 |
-|------|--------------|
-| 页面标题 | `<title>`（含最新话数、状态） |
+| 数据                                   | 选择器 / 位置                                            |
+| -------------------------------------- | -------------------------------------------------------- |
+| 页面标题                               | `<title>`（含最新话数、状态）                            |
 | 名称/别名/作者/热度/最後更新/狀態/題材 | `.comicParticulars-title-right` 文本块，按 `标签：` 分割 |
-| 简介 | `p.intro`（需移除 `.comicDetailAds` 等广告节点） |
+| 简介                                   | `p.intro`（需移除 `.comicDetailAds` 等广告节点）         |
 
 cheerio 解析示例：
 
 ```javascript
-import * as cheerio from 'cheerio';
+import * as cheerio from "cheerio";
 
 const $ = cheerio.load(html);
-const infoBlock = $('.comicParticulars-title-right').first().text().replace(/\s+/g, ' ').trim();
+const infoBlock = $(".comicParticulars-title-right").first().text().replace(/\s+/g, " ").trim();
 const field = (label) => {
   const re = new RegExp(`${label}：\\s*([\\s\\S]*?)(?=\\s+(?:作者|熱度|最後更新|狀態|題材)：|$)`);
   const m = infoBlock.match(re);
-  return m ? m[1].trim() : '';
+  return m ? m[1].trim() : "";
 };
-const $intro = $('p.intro').first();
+const $intro = $("p.intro").first();
 $intro.find('.comicDetailAds, script, style, .ad, [class*="advert"]').remove();
-const intro = $intro.text().replace(/\s+/g, ' ').trim();
+const intro = $intro.text().replace(/\s+/g, " ").trim();
 
 // 结果示例:
 // 页面标题: 海贼王-海贼王漫畫-第1189话-連載中-冒險漫画,热血漫画-在线阅读 - 拷貝漫畫 拷贝漫画
@@ -110,15 +110,19 @@ const intro = $intro.text().replace(/\s+/g, ' ').trim();
 
 ```html
 <!-- 详情页内嵌 <script> 中 -->
-<input id="dnt" value="3" ... />          <!-- dnts 请求头值 -->
-<script>var ccz = 'op0zzpvv.nmn.00p';</script>  <!-- AES key -->
+<input id="dnt" value="3" ... />
+<!-- dnts 请求头值 -->
+<script>
+  var ccz = "op0zzpvv.nmn.00p";
+</script>
+<!-- AES key -->
 ```
 
 提取正则：
 
 ```javascript
-const dnts   = html.match(/id="dnt"[^>]*value="([^"]*)"/)?.[1] ?? '';
-const aesKey = html.match(/var ccz = '([^']*)'/)?.[1] ?? '';
+const dnts = html.match(/id="dnt"[^>]*value="([^"]*)"/)?.[1] ?? "";
+const aesKey = html.match(/var ccz = '([^']*)'/)?.[1] ?? "";
 ```
 
 ### 3.2 请求接口
@@ -136,21 +140,21 @@ Headers:
 
 响应 `results` 字段为 hex 密文，解密规则（与前端 `comic_detail_pass202508141558.js` 逻辑一致）：
 
-| 参数 | 取值 |
-|------|------|
-| 算法 | AES-128-CBC / Pkcs7 |
-| key | `ccz`（UTF-8，16 字节） |
-| IV | 密文**前 16 个字符**（UTF-8，16 字节） |
+| 参数 | 取值                                     |
+| ---- | ---------------------------------------- |
+| 算法 | AES-128-CBC / Pkcs7                      |
+| key  | `ccz`（UTF-8，16 字节）                  |
+| IV   | 密文**前 16 个字符**（UTF-8，16 字节）   |
 | 密文 | 从第 16 个字符开始的剩余部分（hex 解码） |
 
 ```javascript
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv } from "node:crypto";
 
 function decryptChapters(cipherHex, aesKey) {
-  const iv = Buffer.from(cipherHex.slice(0, 16), 'utf8');
-  const data = Buffer.from(cipherHex.slice(16), 'hex');
-  const decipher = createDecipheriv('aes-128-cbc', Buffer.from(aesKey, 'utf8'), iv);
-  return JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8'));
+  const iv = Buffer.from(cipherHex.slice(0, 16), "utf8");
+  const data = Buffer.from(cipherHex.slice(16), "hex");
+  const decipher = createDecipheriv("aes-128-cbc", Buffer.from(aesKey, "utf8"), iv);
+  return JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8"));
 }
 ```
 
@@ -189,35 +193,35 @@ GET https://ios.2026copy.com/comic/{path_word}/chapter/{chapter_uuid}
 
 ```html
 <script>
-  var cct = 'op0zzpvv.nmn.00p';                        // AES key（与 ccz 相同）
-  var contentKey = 'BbY0Ag1rscP64SEvabc66d256938f3a0...'; // 超长 hex 数据（含 IV + 密文）
+  var cct = "op0zzpvv.nmn.00p"; // AES key（与 ccz 相同）
+  var contentKey = "BbY0Ag1rscP64SEvabc66d256938f3a0..."; // 超长 hex 数据（含 IV + 密文）
 </script>
 ```
 
 提取正则：
 
 ```javascript
-const cct        = html.match(/var cct = '([^']*)'/)?.[1] ?? '';
-const contentKey = html.match(/var contentKey = '([^']*)'/)?.[1] ?? '';
+const cct = html.match(/var cct = '([^']*)'/)?.[1] ?? "";
+const contentKey = html.match(/var contentKey = '([^']*)'/)?.[1] ?? "";
 ```
 
 ### 4.2 解密图片列表
 
-| 参数 | 取值 |
-|------|------|
-| 算法 | AES-128-CBC / Pkcs7 |
-| key | `cct`（UTF-8，16 字节） |
-| IV | `contentKey` **前 16 个字符**（UTF-8） |
+| 参数 | 取值                                                  |
+| ---- | ----------------------------------------------------- |
+| 算法 | AES-128-CBC / Pkcs7                                   |
+| key  | `cct`（UTF-8，16 字节）                               |
+| IV   | `contentKey` **前 16 个字符**（UTF-8）                |
 | 密文 | `contentKey` 从第 16 个字符开始的剩余部分（hex 解码） |
 
 > ⚠️ 前端 JS 源码写的是 `contentKey.substring(2, 16)` 作 IV，但实测 `contentKey[0..16)` 才能正确解密，以实际行为为准。
 
 ```javascript
 function decryptContentKey(contentKey, cct) {
-  const iv = Buffer.from(contentKey.slice(0, 16), 'utf8');
-  const data = Buffer.from(contentKey.slice(16), 'hex');
-  const decipher = createDecipheriv('aes-128-cbc', Buffer.from(cct, 'utf8'), iv);
-  return JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8'));
+  const iv = Buffer.from(contentKey.slice(0, 16), "utf8");
+  const data = Buffer.from(contentKey.slice(16), "hex");
+  const decipher = createDecipheriv("aes-128-cbc", Buffer.from(cct, "utf8"), iv);
+  return JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8"));
 }
 ```
 
@@ -251,11 +255,11 @@ node test-search.mjs 海贼王     # 全链路：搜索 → 详情 → 章节 �
 
 脚本内函数一览：
 
-| 函数 | 说明 |
-|------|------|
-| `search(keyword, {limit, offset})` | 搜索，返回 `{list, total}` |
-| `getComicDetail(pathWord)` | cheerio 解析详情页 |
-| `getChapters(pathWord)` | 提取凭证 → 请求加密接口 → 解密章节列表 |
+| 函数                                      | 说明                                       |
+| ----------------------------------------- | ------------------------------------------ |
+| `search(keyword, {limit, offset})`        | 搜索，返回 `{list, total}`                 |
+| `getComicDetail(pathWord)`                | cheerio 解析详情页                         |
+| `getChapters(pathWord)`                   | 提取凭证 → 请求加密接口 → 解密章节列表     |
 | `getChapterImages(pathWord, chapterUuid)` | 抓阅读页 → 解密 contentKey → 图片 URL 数组 |
 
 ---
@@ -315,7 +319,7 @@ CryptoJS.AES.decrypt(密文, _0x8fc01e, { iv: _0x37db36, mode: CryptoJS.mode.CBC
   var ccz = 'op0zzpvv.nmn.00p';     // ← AES key 本体（16 字节 = AES-128）
   ...
 </script>
-<input id="dnt" value="3">           // ← dnts 请求头值（同一页面）
+<input id="dnt" value="3" /> // ← dnts 请求头值（同一页面）
 ```
 
 ### 7.4 图片接口的密钥：同一套路复制
@@ -334,21 +338,22 @@ CryptoJS.AES.decrypt(..., _0x8fc01e, { iv: ..., mode: CBC, padding: Pkcs7 })
 
 ```html
 <script>
-  var cct = 'op0zzpvv.nmn.00p';          // ← key（与 ccz 相同）
-  var contentKey = 'BbY0Ag1rscP64SEv...'; // ← IV(16字符) + hex 密文，直接解密即图片 URL 列表
+  var cct = "op0zzpvv.nmn.00p"; // ← key（与 ccz 相同）
+  var contentKey = "BbY0Ag1rscP64SEv..."; // ← IV(16字符) + hex 密文，直接解密即图片 URL 列表
 </script>
 ```
 
 ### 7.5 结论：密钥体系的本质
 
-| 凭证 | 存放位置 | 获取方式 | 备注 |
-|------|----------|----------|------|
-| `dnts` | 详情页 `<input id="dnt" value="...">` | 正则提取 value | 章节接口请求头 |
-| `ccz` | 详情页内嵌 `<script>var ccz='...'` | 正则提取 | 章节列表 AES key |
-| `cct` | 阅读页内嵌 `<script>var cct='...'` | 正则提取 | 图片列表 AES key |
-| `contentKey` | 阅读页内嵌 `<script>var contentKey='...'` | 正则提取 | 含 IV + 密文，本身即数据载体 |
+| 凭证         | 存放位置                                  | 获取方式       | 备注                         |
+| ------------ | ----------------------------------------- | -------------- | ---------------------------- |
+| `dnts`       | 详情页 `<input id="dnt" value="...">`     | 正则提取 value | 章节接口请求头               |
+| `ccz`        | 详情页内嵌 `<script>var ccz='...'`        | 正则提取       | 章节列表 AES key             |
+| `cct`        | 阅读页内嵌 `<script>var cct='...'`        | 正则提取       | 图片列表 AES key             |
+| `contentKey` | 阅读页内嵌 `<script>var contentKey='...'` | 正则提取       | 含 IV + 密文，本身即数据载体 |
 
 **规律**：
+
 - 密钥不写死在 JS 里，而是**由服务器随页面下发**（每次打开页面都有），所以抓取流程必须是"先抓页面 → 提取凭证 → 再请求数据"，不能硬编码。
 - 当前 `ccz` 与 `cct` 值相同（`op0zzpvv.nmn.00p`，恰好 16 字节 = AES-128 key），但站点随时可能轮换，提取逻辑必须保留。
 - 发现路径总结：`密文响应 → 识别 CryptoJS → 解包混淆 JS → 找到变量引用名（ccz/cct/contentKey）→ 回页面 HTML 搜变量 → 命中密钥`。

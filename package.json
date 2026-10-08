@@ -1,39 +1,35 @@
 {
   "name": "breeze-plugin-copy-comic",
-  "version": "0.0.10",
-  "type": "module",
-  "packageManager": "pnpm@11.8.0",
+  "version": "0.0.11",
   "files": [
     "dist"
   ],
+  "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "format": "prettier . --check",
-    "format:write": "prettier . --write",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "build": "pnpm typecheck && node --import tsx build/generate-version.ts && node --import tsx build/generate-manifest.ts && cross-env NODE_OPTIONS=\"--import tsx\" rspack build && node --import tsx build/generate-brotli.ts",
     "dev": "pnpm dev:serve",
     "dev:serve": "tsx dev-server.ts"
   },
+  "dependencies": {
+    "breeze-plugin-kit": "^0.14.0"
+  },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@rspack/cli": "^2.1.8",
     "@rspack/core": "^2.1.8",
     "@types/node": "^26.1.2",
     "cheerio": "^1.2.0",
     "cross-env": "^10.1.0",
-    "eslint": "^10.8.0",
-    "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.9.0",
     "ky": "^2.0.2",
     "oxc-parser": "^0.143.0",
-    "prettier": "^3.9.6",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
     "tsx": "^4.23.8",
-    "typescript": "^7.0.2",
-    "typescript-eslint": "^8.66.0"
+    "typescript": "^7.0.2"
   },
-  "dependencies": {
-    "breeze-plugin-kit": "^0.5.0"
-  }
+  "packageManager": "pnpm@12.5.0"
 }

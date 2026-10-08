@@ -7,6 +7,7 @@ import type {
   ComicDetailContract,
   ComicPagedListContract,
   FilterBundleContract,
+  OpenSearchAction,
   ReadSnapshotContract,
   SearchResultContract,
   StringMap,
@@ -333,7 +334,7 @@ async function resolvePlatformValue() {
   return resolved;
 }
 
-function openSearchAction(keyword: string, extern: Record<string, unknown> = {}) {
+function openSearchAction(keyword: string, extern: Record<string, unknown> = {}): OpenSearchAction {
   return {
     type: "openSearch",
     payload: {
@@ -515,7 +516,9 @@ async function fetchCopyApi<T>(url: string) {
 
 async function fetchCopyApiWithHeaders<T>(url: string, headers: Record<string, string>) {
   const safeHeaders = Object.fromEntries(
-    Object.entries(headers).map(([k, v]) => (k.toLowerCase() === "authorization" ? [k, "***"] : [k, v])),
+    Object.entries(headers).map(([k, v]) =>
+      k.toLowerCase() === "authorization" ? [k, "***"] : [k, v],
+    ),
   );
   console.log(`[api] fetchCopyApiWithHeaders url="${url}" headers=${JSON.stringify(safeHeaders)}`);
   const json = (await ky
@@ -1109,7 +1112,8 @@ async function getHomeRank(payload: RankPayload = {}): Promise<ComicPagedListCon
       : (dateMap[dateOption] ?? "day")
   ) as "day" | "week" | "month" | "total";
   const rankType = (Number(payload.rankType) === 5 ? "5" : (typeMap[typeOption] ?? "1")) as
-    "1" | "5";
+    | "1"
+    | "5";
   const params = new URLSearchParams({
     type: rankType,
     date_type: dateType,
@@ -1494,7 +1498,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
           path: "",
           extern: {},
         }),
-        onTap: {},
+        onTap: null,
         extern: {},
       },
       description: String(detail.brief ?? ""),

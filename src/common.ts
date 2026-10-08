@@ -1,4 +1,4 @@
-import type { ActionItem, MetadataListItem } from "breeze-plugin-kit";
+import type { ActionItem, ComicInfoPageAction, MetadataListItem } from "breeze-plugin-kit";
 
 export const NOT_FOUND_IMAGE_URL = "";
 export const PLACEHOLDER_IMAGE_PATH = "placeholder/image-404.png";
@@ -12,7 +12,7 @@ export function toStringMap(value: unknown): Record<string, unknown> {
 
 export function createActionItem(
   name: unknown,
-  onTap: Record<string, unknown> = {},
+  onTap: ComicInfoPageAction | null = null,
   extern: Record<string, unknown> = {},
 ) {
   return {
@@ -48,7 +48,7 @@ export function createBasicMetadata(type: string, name: string, values: unknown)
     value: list
       .map((item) => String(item ?? "").trim())
       .filter(Boolean)
-      .map((item) => ({ name: item, onTap: {}, extern: {} }) as ActionItem),
+      .map((item) => ({ name: item, onTap: null, extern: {} }) as ActionItem),
   };
 }
 
