@@ -27,17 +27,10 @@ import {
   CHAPTER_CACHE_TTL_MS,
   DEFAULT_API_BASE,
   DOWNLOAD_CANCELLED_MESSAGE,
-  FETCH_IMAGE_MAX_CONCURRENT,
-  FETCH_IMAGE_PRIORITY_REQUESTS_PER_MINUTE,
-  FETCH_IMAGE_REQUESTS_PER_MINUTE,
-  GET_CHAPTER_MAX_CONCURRENT,
-  GET_CHAPTER_REQUESTS_PER_MINUTE,
   PLUGIN_ID,
-  RATE_LIMIT_WAIT_CHUNK_MS,
   SEARCH_PAGE_SIZE,
 } from "./config";
 import { buildPluginInfo } from "./get-info";
-import { createFetchImageDualLimiter, createRateLimiter } from "./limiter";
 import type {
   CachedChapterContent,
   CachedGetChapterResult,
@@ -624,31 +617,6 @@ async function isTaskGroupCancelled(taskGroupKey: string) {
   }
 }
 
-const limitGetChapter = createRateLimiter(
-  "getChapter",
-  GET_CHAPTER_REQUESTS_PER_MINUTE,
-  GET_CHAPTER_MAX_CONCURRENT,
-  {
-    cache,
-    toStringMap,
-    isTaskGroupCancelled,
-    rateLimitWaitChunkMs: RATE_LIMIT_WAIT_CHUNK_MS,
-    downloadCancelledMessage: DOWNLOAD_CANCELLED_MESSAGE,
-  },
-);
-const limitFetchImageDual = createFetchImageDualLimiter(
-  FETCH_IMAGE_PRIORITY_REQUESTS_PER_MINUTE,
-  FETCH_IMAGE_REQUESTS_PER_MINUTE,
-  FETCH_IMAGE_MAX_CONCURRENT,
-  {
-    cache,
-    toStringMap,
-    isTaskGroupCancelled,
-    rateLimitWaitChunkMs: RATE_LIMIT_WAIT_CHUNK_MS,
-    downloadCancelledMessage: DOWNLOAD_CANCELLED_MESSAGE,
-  },
-);
-
 function buildChapterCacheKey(comicId: string, groups: DetailApiGroup[]) {
   const groupKey = groups
     .map((group) => String(group.path_word ?? "").trim())
@@ -975,11 +943,15 @@ function mapRankBookToComic(book: { [key: string]: unknown }) {
     path_word: String(book.path_word ?? "").trim(),
     cover: String(book.cover ?? "").trim(),
     author: Array.isArray(book.author)
-      ? book.author.map((row) => ({ name: String(toStringMap(row).name ?? "").trim() }))
+      ? book.author.map((row) => ({
+          name: String(toStringMap(row).name ?? "").trim(),
+        }))
       : [],
     popular: Number(book.popular ?? 0) || 0,
     theme: Array.isArray(book.theme)
-      ? book.theme.map((row) => ({ name: String(toStringMap(row).name ?? "").trim() }))
+      ? book.theme.map((row) => ({
+          name: String(toStringMap(row).name ?? "").trim(),
+        }))
       : [],
     status: { display: "", value: "" },
     datetime_updated: "",
@@ -1087,7 +1059,10 @@ async function getHomeRank(payload: RankPayload = {}): Promise<ComicPagedListCon
   const extern = toStringMap(payload.extern);
   const page = Math.max(1, Number(payload.page ?? 1) || 1);
   const offset = (page - 1) * HOME_PAGE_SIZE;
-  const audienceMap: Record<string, "male" | "female"> = { 男频: "male", 女频: "female" };
+  const audienceMap: Record<string, "male" | "female"> = {
+    男频: "male",
+    女频: "female",
+  };
   const dateMap: Record<string, "day" | "week" | "month" | "total"> = {
     日榜: "day",
     周榜: "week",
@@ -1317,7 +1292,11 @@ async function getCapabilities(): Promise<CapabilitiesBundleContract> {
       version: "1.0.0",
       type: "capabilities",
       actions: [
-        { key: "home.recommend", title: "漫画推荐", fnPath: "getHomeRecommend" },
+        {
+          key: "home.recommend",
+          title: "漫画推荐",
+          fnPath: "getHomeRecommend",
+        },
         { key: "home.newest", title: "全新上架", fnPath: "getHomeNewest" },
         { key: "home.discover", title: "发现", fnPath: "getHomeDiscover" },
         { key: "home.rank", title: "排行榜", fnPath: "getHomeRank" },
@@ -1738,89 +1717,23 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
     };
   }
 
-  return limitGetChapter(async () => {
-    const recheckCached = await readGetChapterCache(comicId, chapterId);
-    if (recheckCached) {
-      const rcc = recheckCached.chapter as Record<string, unknown>;
-      const recheckChapter: ChapterWithPages = {
-        id: (rcc["id"] ?? rcc["epId"] ?? "").toString(),
-        requestId: (rcc["requestId"] ?? "").toString(),
-        logicalKey: (rcc["logicalKey"] ?? "").toString(),
-        storageChapterId: (rcc["storageChapterId"] ?? "").toString(),
-        name: (rcc["name"] ?? rcc["epName"] ?? "").toString(),
-        order: Number(rcc["order"] ?? 0),
-        pages: (Array.isArray(rcc["pages"])
-          ? rcc["pages"]
-          : Array.isArray(rcc["docs"])
-            ? rcc["docs"]
-            : []) as ChapterPage[],
-        extern: (rcc["extern"] ?? {}) as StringMap,
-      };
-
-      return {
-        source: PLUGIN_ID,
-        comicId,
-        chapterId,
-        extern: payload.extern ?? null,
-        scheme: {
-          version: "1.0.0" as const,
-          type: "chapterContent" as const,
-          source: PLUGIN_ID,
-        },
-        data: {
-          comic: {
-            id: comicId,
-            source: PLUGIN_ID,
-            title: (rcc["name"] ?? rcc["epName"] ?? "").toString(),
-            extern: {},
-          },
-          chapter: recheckChapter,
-          chapters: [],
-        },
-      };
-    }
-
-    const headers: Record<string, string> = {
-      ...(await getApiHeaders()),
+  const recheckCached = await readGetChapterCache(comicId, chapterId);
+  if (recheckCached) {
+    const rcc = recheckCached.chapter as Record<string, unknown>;
+    const recheckChapter: ChapterWithPages = {
+      id: (rcc["id"] ?? rcc["epId"] ?? "").toString(),
+      requestId: (rcc["requestId"] ?? "").toString(),
+      logicalKey: (rcc["logicalKey"] ?? "").toString(),
+      storageChapterId: (rcc["storageChapterId"] ?? "").toString(),
+      name: (rcc["name"] ?? rcc["epName"] ?? "").toString(),
+      order: Number(rcc["order"] ?? 0),
+      pages: (Array.isArray(rcc["pages"])
+        ? rcc["pages"]
+        : Array.isArray(rcc["docs"])
+          ? rcc["docs"]
+          : []) as ChapterPage[],
+      extern: (rcc["extern"] ?? {}) as StringMap,
     };
-    const localToken = await loadAuthToken();
-    if (localToken) {
-      headers.authorization = `Token ${localToken}`;
-    }
-    const chapterContent = await getChapterContentWithCache(comicId, chapterId, headers);
-    const imageUrls = sortChapterImageUrls(chapterContent.contents, chapterContent.words);
-    const docs = imageUrls.map((imageUrl, index) => {
-      const name = extractImageName(imageUrl, index);
-      const path = `comic/${comicId}/${chapterId}/${name}`;
-      return {
-        id: `${chapterId}-${index + 1}`,
-        name,
-        path,
-        url: imageUrl,
-        extern: {
-          index: index + 1,
-          comicId,
-          chapterId,
-          chapterOrder: targetChapter.order,
-        },
-      };
-    });
-    if (docs.length === 0) {
-      throw new Error("当前章节没有可下载图片");
-    }
-
-    const chapter = {
-      id: chapterId,
-      requestId: "",
-      logicalKey: "",
-      storageChapterId: "",
-      name: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
-      order: targetChapter.order,
-      pages: docs,
-      extern: targetChapter.extern,
-    };
-
-    await writeGetChapterCache(comicId, chapterId, chapter);
 
     return {
       source: PLUGIN_ID,
@@ -1828,30 +1741,99 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
       chapterId,
       extern: payload.extern ?? null,
       scheme: {
-        version: "1.0.0",
-        type: "chapterContent",
+        version: "1.0.0" as const,
+        type: "chapterContent" as const,
         source: PLUGIN_ID,
       },
       data: {
         comic: {
           id: comicId,
           source: PLUGIN_ID,
-          title: chapter.name,
+          title: (rcc["name"] ?? rcc["epName"] ?? "").toString(),
           extern: {},
         },
-        chapter,
-        chapters: eps.map((item) => ({
-          id: item.id,
-          requestId: "",
-          logicalKey: "",
-          storageChapterId: "",
-          name: item.name || `章节 ${item.id}`,
-          order: item.order,
-          extern: { ...item.extern, comicId, chapterId: item.id, order: item.order },
-        })),
+        chapter: recheckChapter,
+        chapters: [],
+      },
+    };
+  }
+
+  const headers: Record<string, string> = {
+    ...(await getApiHeaders()),
+  };
+  const localToken = await loadAuthToken();
+  if (localToken) {
+    headers.authorization = `Token ${localToken}`;
+  }
+  const chapterContent = await getChapterContentWithCache(comicId, chapterId, headers);
+  const imageUrls = sortChapterImageUrls(chapterContent.contents, chapterContent.words);
+  const docs = imageUrls.map((imageUrl, index) => {
+    const name = extractImageName(imageUrl, index);
+    const path = `comic/${comicId}/${chapterId}/${name}`;
+    return {
+      id: `${chapterId}-${index + 1}`,
+      name,
+      path,
+      url: imageUrl,
+      extern: {
+        index: index + 1,
+        comicId,
+        chapterId,
+        chapterOrder: targetChapter.order,
       },
     };
   });
+  if (docs.length === 0) {
+    throw new Error("当前章节没有可下载图片");
+  }
+
+  const chapter = {
+    id: chapterId,
+    requestId: "",
+    logicalKey: "",
+    storageChapterId: "",
+    name: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
+    order: targetChapter.order,
+    pages: docs,
+    extern: targetChapter.extern,
+  };
+
+  await writeGetChapterCache(comicId, chapterId, chapter);
+
+  return {
+    source: PLUGIN_ID,
+    comicId,
+    chapterId,
+    extern: payload.extern ?? null,
+    scheme: {
+      version: "1.0.0",
+      type: "chapterContent",
+      source: PLUGIN_ID,
+    },
+    data: {
+      comic: {
+        id: comicId,
+        source: PLUGIN_ID,
+        title: chapter.name,
+        extern: {},
+      },
+      chapter,
+      chapters: eps.map((item) => ({
+        id: item.id,
+        requestId: "",
+        logicalKey: "",
+        storageChapterId: "",
+        name: item.name || `章节 ${item.id}`,
+        order: item.order,
+        extern: {
+          ...item.extern,
+          comicId,
+          chapterId: item.id,
+          order: item.order,
+        },
+      })),
+    },
+  };
 }
 
 async function fetchImageBytes({
@@ -1866,7 +1848,6 @@ async function fetchImageBytes({
   }
 
   const externMap = toStringMap(extern);
-  const priority = Number(externMap.priority ?? 1);
   const resolvedTaskGroupKey = String(
     taskGroupKey || externMap.taskGroupKey || externMap.qjsTaskGroupKey || externMap.comicId || "",
   ).trim();
@@ -1874,39 +1855,25 @@ async function fetchImageBytes({
     throw new Error(DOWNLOAD_CANCELLED_MESSAGE);
   }
 
-  const fetchBytes = async () => {
-    const resolvedTimeout = Math.max(0, Number(timeoutMs) || 30000);
-    const arrayBuffer = await ky
-      .get(targetUrl, {
-        headers: {
-          Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-          "x-rquickjs-host-offload-binary-v1": "1",
-        },
-        timeout: resolvedTimeout,
-      })
-      .arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    if (bytes.byteLength === 0) {
-      throw new Error("图片数据为空");
-    }
-    return bytes;
-  };
-
-  const isJpg = (() => {
-    try {
-      return new URL(targetUrl).pathname.toLowerCase().endsWith(".jpg");
-    } catch {
-      return targetUrl.toLowerCase().split("?")[0].endsWith(".jpg");
-    }
-  })();
-  if (isJpg || priority === 0) {
-    return fetchBytes();
+  const resolvedTimeout = Math.max(0, Number(timeoutMs) || 30000);
+  const arrayBuffer = await ky
+    .get(targetUrl, {
+      headers: {
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "x-rquickjs-host-offload-binary-v1": "1",
+      },
+      timeout: resolvedTimeout,
+    })
+    .arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  if (bytes.byteLength === 0) {
+    throw new Error("图片数据为空");
   }
+  return bytes;
+}
 
-  return limitFetchImageDual(fetchBytes, {
-    priority,
-    taskGroupKey: resolvedTaskGroupKey,
-  });
+async function getDownloadConcurrency(): Promise<{ concurrency: number }> {
+  return { concurrency: 1 };
 }
 
 async function getSettingsBundle(): Promise<SettingsBundleContract> {
@@ -2022,6 +1989,7 @@ export default {
   getChapter,
   getReadSnapshot,
   fetchImageBytes,
+  getDownloadConcurrency,
   getSettingsBundle,
   saveSettings,
   getCapabilitiesBundle,
