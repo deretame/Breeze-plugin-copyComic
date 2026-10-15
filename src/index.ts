@@ -5,14 +5,33 @@ import type {
   ChapterSummary,
   ChapterWithPages,
   ComicDetailContract,
+  ComicListScene,
+  ComicListSceneBundleContract,
   ComicPagedListContract,
+  FavoriteWorkflowContinuePayload,
+  FavoriteWorkflowResult,
+  FavoriteWorkflowStartPayload,
   FilterBundleContract,
+  LoginBundleContract,
+  LoginSubmitPayload,
+  LoginSubmitResult,
   OpenSearchAction,
   ReadSnapshotContract,
   SearchResultContract,
   StringMap,
+  ToggleFavoritePayload,
+  ToggleFavoriteResult,
+  UserInfoBundleContract,
 } from "breeze-plugin-kit";
-import { cache, pluginConfig, runtime } from "breeze-plugin-kit";
+import {
+  authConfig,
+  buildLoginBundle,
+  buildUnauthorizedError,
+  cache,
+  pluginConfig,
+  readLoginValues,
+  runtime,
+} from "breeze-plugin-kit";
 import ky from "ky";
 import {
   NOT_FOUND_IMAGE_URL,
@@ -40,13 +59,17 @@ import type {
   ChapterContentItem,
   ChapterContentResult,
   ChapterPayload,
+  CloudFavoritePayload,
+  CollectApiData,
+  CollectApiItem,
   ComicDetailPayload,
+  ComicQueryResult,
   CopyApiResponse,
-  DetailApiComic,
   DetailApiGroup,
   DetailApiResult,
   FetchImagePayload,
   MappedEpItem,
+  MemberInfoResult,
   NewestApiData,
   NewestPayload,
   RankApiData,
@@ -528,10 +551,207 @@ async function fetchCopyApiWithHeaders<T>(url: string, headers: Record<string, s
 
 async function loadAuthToken() {
   try {
-    return String(await pluginConfig.load(AUTH_TOKEN_CONFIG_KEY, "")).trim();
+    return String(await authConfig.load(AUTH_TOKEN_CONFIG_KEY, "")).trim();
   } catch {
     return "";
   }
+}
+
+const AUTH_USERNAME_CONFIG_KEY = "auth.username";
+const COLLECT_PAGE_SIZE = 21;
+const DEFAULT_COLLECT_ORDERING = "-datetime_modifier";
+const COLLECT_ORDERING_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: "最近收藏", value: "-datetime_modifier" },
+  { label: "最早收藏", value: "datetime_modifier" },
+  { label: "热度最高", value: "-popular" },
+];
+
+async function loadAuthUsername(): Promise<string> {
+  try {
+    return String(await authConfig.load(AUTH_USERNAME_CONFIG_KEY, "")).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function getAuthedHeaders(): Promise<Record<string, string>> {
+  const headers = await getApiHeaders();
+  const token = await loadAuthToken();
+  if (!token) {
+    throw buildUnauthorizedError(PLUGIN_ID, "请先登录后再使用收藏功能");
+  }
+  headers.authorization = `Token ${token}`;
+  return headers;
+}
+
+async function fetchCopyAuthedApi<T>(url: string): Promise<CopyApiResponse<T>> {
+  return fetchCopyApiWithHeaders<T>(url, await getAuthedHeaders());
+}
+
+async function fetchComicUuid(comicId: string): Promise<string> {
+  const apiBase = await resolveApiBase();
+  const params = new URLSearchParams({ platform: "1" });
+  const detailUrl = `${apiBase}/comic2/${encodeURIComponent(comicId)}?${params.toString()}`;
+  const detailResp = await fetchCopyApi<DetailApiResult>(detailUrl);
+  const resultsMap = toStringMap(detailResp.results);
+  let uuid = "";
+  if ("comic" in resultsMap) {
+    const comicMap = toStringMap(resultsMap.comic);
+    if ("uuid" in comicMap) {
+      uuid = String(comicMap.uuid ?? "").trim();
+    }
+  }
+  if (!uuid) {
+    throw new Error("未找到漫画 UUID，无法收藏");
+  }
+  return uuid;
+}
+
+async function queryFavoriteCollectId(comicId: string): Promise<number | null> {
+  const apiBase = await resolveApiBase();
+  const params = new URLSearchParams({ platform: "1" });
+  const queryUrl = `${apiBase}/comic2/${encodeURIComponent(comicId)}/query?${params.toString()}`;
+  let queryResp: CopyApiResponse<ComicQueryResult>;
+  try {
+    queryResp = await fetchCopyApiWithHeaders<ComicQueryResult>(queryUrl, await getAuthedHeaders());
+  } catch (error) {
+    const message = String((error as Error).message ?? "");
+    const lowered = message.toLowerCase();
+    if (
+      lowered.includes("登录") ||
+      lowered.includes("登錄") ||
+      lowered.includes("token") ||
+      lowered.includes("unauthorized") ||
+      lowered.includes("401")
+    ) {
+      throw buildUnauthorizedError(PLUGIN_ID, "登录已失效，请重新登录");
+    }
+    throw error instanceof Error ? error : new Error(message || "请求失败");
+  }
+  const resultsMap = toStringMap(queryResp.results);
+  const collectId = "collect" in resultsMap ? Number(resultsMap.collect) : Number.NaN;
+  return Number.isFinite(collectId) && collectId > 0 ? collectId : null;
+}
+
+async function addCopyFavorite(comicId: string): Promise<void> {
+  const apiBase = await resolveApiBase();
+  const uuid = await fetchComicUuid(comicId);
+  const body = new URLSearchParams({ comic_id: uuid, is_collect: "1" }).toString();
+  let resp: CopyApiResponse<null>;
+  try {
+    resp = (await ky
+      .post(`${apiBase}/member/collect/comic?platform=1`, {
+        headers: await getAuthedHeaders(),
+        body,
+      })
+      .json()) as CopyApiResponse<null>;
+  } catch (error) {
+    const message = String((error as Error).message ?? "");
+    const lowered = message.toLowerCase();
+    if (
+      lowered.includes("登录") ||
+      lowered.includes("登錄") ||
+      lowered.includes("token") ||
+      lowered.includes("unauthorized") ||
+      lowered.includes("401")
+    ) {
+      throw buildUnauthorizedError(PLUGIN_ID, "登录已失效，请重新登录");
+    }
+    throw error instanceof Error ? error : new Error(message || "收藏失败");
+  }
+  if (Number(resp.code ?? 0) !== 200) {
+    throw new Error(resp.message || "收藏失败");
+  }
+}
+
+async function removeCopyFavoriteByComic(comicId: string): Promise<void> {
+  const collectId = await queryFavoriteCollectId(comicId);
+  if (!collectId) {
+    return;
+  }
+  const apiBase = await resolveApiBase();
+  const body = new URLSearchParams({ ids: String(collectId) }).toString();
+  let resp: CopyApiResponse<unknown>;
+  try {
+    // ky.delete 不支持 body，改用 method DELETE 的通用请求。
+    resp = (await ky(`${apiBase}/member/collect/comics?platform=1`, {
+      method: "DELETE",
+      headers: {
+        ...(await getAuthedHeaders()),
+        "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+      },
+      body,
+    }).json()) as CopyApiResponse<unknown>;
+  } catch (error) {
+    const message = String((error as Error).message ?? "");
+    const lowered = message.toLowerCase();
+    if (
+      lowered.includes("登录") ||
+      lowered.includes("登錄") ||
+      lowered.includes("token") ||
+      lowered.includes("unauthorized") ||
+      lowered.includes("401")
+    ) {
+      throw buildUnauthorizedError(PLUGIN_ID, "登录已失效，请重新登录");
+    }
+    throw error instanceof Error ? error : new Error(message || "取消收藏失败");
+  }
+  if (Number(resp.code ?? 0) !== 200) {
+    throw new Error(resp.message || "取消收藏失败");
+  }
+}
+
+function mapCollectComicToGrid(item: CollectApiItem) {
+  const collectId = Number(item.uuid ?? 0);
+  const comicMap = toStringMap(item.comic);
+  const authorsRaw = "author" in comicMap && Array.isArray(comicMap.author) ? comicMap.author : [];
+  const themesRaw = "theme" in comicMap && Array.isArray(comicMap.theme) ? comicMap.theme : [];
+  const statusMap = "status" in comicMap ? toStringMap(comicMap.status) : {};
+  const comic: SearchApiComic = {
+    name: "name" in comicMap ? String(comicMap.name ?? "") : "",
+    path_word: "path_word" in comicMap ? String(comicMap.path_word ?? "") : "",
+    cover: "cover" in comicMap ? String(comicMap.cover ?? "") : "",
+    author: authorsRaw.map((row) => ({
+      name: String(toStringMap(row).name ?? ""),
+    })),
+    popular: "popular" in comicMap ? Number(comicMap.popular ?? 0) : 0,
+    datetime_updated: "datetime_updated" in comicMap ? String(comicMap.datetime_updated ?? "") : "",
+    last_chapter_name:
+      "last_chapter_name" in comicMap ? String(comicMap.last_chapter_name ?? "") : "",
+    status: {
+      value: "value" in statusMap ? String(statusMap.value ?? "") : "",
+      display: "display" in statusMap ? String(statusMap.display ?? "") : "",
+    },
+    theme: themesRaw.map((row) => ({
+      name: String(toStringMap(row).name ?? ""),
+    })),
+  };
+  const grid = mapSearchComicToGrid(comic);
+  if (!grid) {
+    return null;
+  }
+  return {
+    ...grid,
+    extern: {
+      ...toStringMap(grid.extern),
+      collectId: Number.isFinite(collectId) ? collectId : 0,
+    },
+  };
+}
+
+function buildCopyCloudFavoriteScene(): ComicListScene {
+  return {
+    title: "云端收藏",
+    source: PLUGIN_ID,
+    body: {
+      type: "pluginPagedComicList",
+      request: {
+        fnPath: "getCloudFavoriteData",
+        core: {},
+        extern: { source: "cloudFavorite" },
+      },
+    },
+  };
 }
 
 function sanitizeFileName(name: string) {
@@ -1396,25 +1616,33 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
   });
   const detailUrl = `${apiBase}/comic2/${encodeURIComponent(comicId)}?${params.toString()}`;
   const detailResp = await fetchCopyApi<DetailApiResult>(detailUrl);
-  const result = toStringMap(detailResp.results) as DetailApiResult;
-  const detail = toStringMap(result.comic) as DetailApiComic;
-
-  const authorEntries = Array.isArray(detail.author)
-    ? detail.author
-        .map((item) => ({
-          name: String(item?.name ?? "").trim(),
-          pathWord: String(item?.path_word ?? "").trim(),
-        }))
-        .filter((item) => item.name)
-    : [];
-  const themeEntries = Array.isArray(detail.theme)
-    ? detail.theme
-        .map((item) => ({
-          name: String(item?.name ?? "").trim(),
-          pathWord: String(item?.path_word ?? "").trim(),
-        }))
-        .filter((item) => item.name)
-    : [];
+  const resultMap = toStringMap(detailResp.results);
+  const detailMap = toStringMap(resultMap.comic);
+  const authorsRaw = Array.isArray(detailMap.author) ? detailMap.author : [];
+  const themesRaw = Array.isArray(detailMap.theme) ? detailMap.theme : [];
+  const statusMap = toStringMap(detailMap.status);
+  const regionMap = toStringMap(detailMap.region);
+  const reclassMap = toStringMap(detailMap.reclass);
+  const lastChapterMap = toStringMap(detailMap.last_chapter);
+  const groupsRaw = "groups" in resultMap ? resultMap.groups : detailMap.groups;
+  const authorEntries = authorsRaw
+    .map((item) => {
+      const authorMap = toStringMap(item);
+      return {
+        name: String("name" in authorMap ? (authorMap.name ?? "") : "").trim(),
+        pathWord: String("path_word" in authorMap ? (authorMap.path_word ?? "") : "").trim(),
+      };
+    })
+    .filter((item) => item.name);
+  const themeEntries = themesRaw
+    .map((item) => {
+      const themeMap = toStringMap(item);
+      return {
+        name: String("name" in themeMap ? (themeMap.name ?? "") : "").trim(),
+        pathWord: String("path_word" in themeMap ? (themeMap.path_word ?? "") : "").trim(),
+      };
+    })
+    .filter((item) => item.name);
   const authorActions = authorEntries.map((author) =>
     createActionItem(
       author.name,
@@ -1442,17 +1670,33 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
     ),
   );
   const statusText =
-    String(detail.status?.display ?? "").trim() || String(detail.status?.value ?? "").trim();
-  const groups = normalizeGroups(result.groups ?? detail.groups);
+    String("display" in statusMap ? (statusMap.display ?? "") : "").trim() ||
+    String("value" in statusMap ? (statusMap.value ?? "") : "").trim();
+  const groups = normalizeGroups(groupsRaw);
 
   const eps = await fetchAllGroupChapters(comicId, groups);
-  const updateText = formatDateTime(detail.datetime_updated);
-  const title = String(detail.name ?? "").trim() || comicId;
-  const coverUrl = String(detail.cover ?? "").trim();
-  const popular = Number(result.popular ?? detail.popular ?? 0) || 0;
-  const regionText = String(detail.region?.display ?? "").trim();
-  const reclassText = String(detail.reclass?.display ?? "").trim();
-  const lastChapterName = String(detail.last_chapter?.name ?? "").trim();
+  const updateText = formatDateTime(
+    "datetime_updated" in detailMap ? detailMap.datetime_updated : "",
+  );
+  const title = String("name" in detailMap ? (detailMap.name ?? "") : "").trim() || comicId;
+  const coverUrl = String("cover" in detailMap ? (detailMap.cover ?? "") : "").trim();
+  const popular =
+    Number("popular" in resultMap ? (resultMap.popular ?? 0) : 0) ||
+    Number("popular" in detailMap ? (detailMap.popular ?? 0) : 0) ||
+    0;
+  const regionText = String("display" in regionMap ? (regionMap.display ?? "") : "").trim();
+  const reclassText = String("display" in reclassMap ? (reclassMap.display ?? "") : "").trim();
+  const lastChapterName = String(
+    "name" in lastChapterMap ? (lastChapterMap.name ?? "") : "",
+  ).trim();
+  let isFavourite = false;
+  try {
+    if (await loadAuthToken()) {
+      isFavourite = (await queryFavoriteCollectId(comicId)) !== null;
+    }
+  } catch {
+    isFavourite = false;
+  }
 
   const normal = {
     comicInfo: {
@@ -1480,7 +1724,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
         onTap: null,
         extern: {},
       },
-      description: String(detail.brief ?? ""),
+      description: String("brief" in detailMap ? (detailMap.brief ?? "") : ""),
       cover: createImage({
         id: comicId,
         url: coverUrl || NOT_FOUND_IMAGE_URL,
@@ -1505,27 +1749,24 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
       }),
       extern: {},
     },
-    eps: eps.map(
-      (ep) =>
-        ({
-          id: ep.id,
-          requestId: "",
-          logicalKey: "",
-          storageChapterId: "",
-          name: ep.name,
-          order: ep.order,
-          extern: ep.extern,
-        }) as ChapterSummary,
-    ),
+    eps: eps.map((ep) => ({
+      id: ep.id,
+      requestId: "",
+      logicalKey: "",
+      storageChapterId: "",
+      name: ep.name,
+      order: ep.order,
+      extern: ep.extern,
+    })),
     recommend: [],
     totalViews: popular,
     totalLikes: popular,
     totalComments: 0,
-    isFavourite: false,
+    isFavourite,
     isLiked: false,
     allowComments: false,
     allowLike: false,
-    allowCollected: false,
+    allowCollected: true,
     allowDownload: true,
     extern: {},
   };
@@ -1539,7 +1780,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
   const data = {
     normal,
     raw: {
-      comicInfo: detail,
+      comicInfo: detailMap,
       series: eps,
     },
   };
@@ -1876,6 +2117,369 @@ async function getDownloadConcurrency(): Promise<{ concurrency: number }> {
   return { concurrency: 1 };
 }
 
+async function submitCopyLogin(
+  username: string,
+  password: string,
+): Promise<CopyApiResponse<MemberInfoResult>> {
+  const apiBase = await resolveApiBase();
+  const nodeBuffer = globalThis.Buffer;
+  if (!nodeBuffer) {
+    throw new Error("当前运行时不支持 base64 编码");
+  }
+  const rawBytes = new TextEncoder().encode(`${password}-1729`);
+  const encrypted = nodeBuffer.from(rawBytes).toString("base64");
+  const body = new URLSearchParams({
+    username,
+    password: encrypted,
+    salt: "1729",
+  }).toString();
+  const resp = (await ky
+    .post(`${apiBase}/login`, {
+      headers: {
+        ...(await getApiHeaders()),
+        "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+      },
+      body,
+    })
+    .json()) as CopyApiResponse<MemberInfoResult & { token?: string }>;
+  if (Number(resp.code ?? 0) !== 200) {
+    throw new Error(resp.message || "登录失败");
+  }
+  const resultsMap = toStringMap(resp.results);
+  const token = "token" in resultsMap ? String(resultsMap.token ?? "").trim() : "";
+  if (!token) {
+    throw new Error("登录成功但未返回 token");
+  }
+  await Promise.allSettled([
+    authConfig.save(AUTH_TOKEN_CONFIG_KEY, token),
+    authConfig.save(AUTH_USERNAME_CONFIG_KEY, username),
+  ]);
+  return resp;
+}
+
+async function getLoginBundle(): Promise<LoginBundleContract> {
+  const username = await loadAuthUsername();
+  return buildLoginBundle(PLUGIN_ID, {
+    title: "拷贝漫画登录",
+    fields: [
+      { key: "username", kind: "text", label: "用户名", required: true },
+      { key: "password", kind: "password", label: "密码", required: true },
+    ],
+    submitFnPath: "loginWithPassword",
+    submitText: "登录",
+    values: { username },
+  });
+}
+
+async function loginWithPassword(payload: LoginSubmitPayload = {}): Promise<LoginSubmitResult> {
+  const values = readLoginValues(payload);
+  const payloadMap = toStringMap(payload);
+  const username = String(
+    values.username ?? ("username" in payloadMap ? payloadMap.username : "") ?? "",
+  ).trim();
+  const password = String(
+    values.password ?? ("password" in payloadMap ? payloadMap.password : "") ?? "",
+  );
+  if (!username || !password) {
+    throw new Error("用户名或密码不能为空");
+  }
+  await submitCopyLogin(username, password);
+  return {
+    source: PLUGIN_ID,
+    message: "登录成功",
+    data: { username },
+  };
+}
+
+async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
+  const apiBase = await resolveApiBase();
+  const storedUsername = await loadAuthUsername();
+  let infoMap: Record<string, unknown> = {};
+  try {
+    const info = await fetchCopyAuthedApi<MemberInfoResult>(`${apiBase}/member/info?platform=1`);
+    infoMap = toStringMap(info.results);
+  } catch {
+    infoMap = {};
+  }
+  const username =
+    String(
+      ("nickname" in infoMap ? infoMap.nickname : "") ??
+        ("username" in infoMap ? infoMap.username : "") ??
+        "",
+    ).trim() || storedUsername;
+  const avatarUrl = String("avatar" in infoMap ? (infoMap.avatar ?? "") : "").trim();
+  const userId = String("user_id" in infoMap ? (infoMap.user_id ?? "") : "").trim();
+  return {
+    source: PLUGIN_ID,
+    scheme: { version: "1.0.0", type: "userInfo" },
+    data: {
+      title: "拷贝漫画",
+      avatar: {
+        id: userId || "me",
+        url: avatarUrl,
+        name: avatarUrl ? `${userId || "me"}.jpg` : "",
+        path: avatarUrl ? `user/${userId || "me"}.jpg` : "",
+        extern: {},
+      },
+      lines: [username || "拷贝漫画用户", userId ? `ID: ${userId}` : ""],
+      extern: { userId, username },
+    },
+  };
+}
+
+async function toggleFavorite(payload: ToggleFavoritePayload = {}): Promise<ToggleFavoriteResult> {
+  const comicId = String(payload.comicId ?? "").trim();
+  if (!comicId) {
+    throw new Error("comicId 不能为空");
+  }
+  const favorited = payload.currentFavorite !== true;
+  if (favorited) {
+    await addCopyFavorite(comicId);
+  } else {
+    await removeCopyFavoriteByComic(comicId);
+  }
+  return { favorited, nextStep: "none" };
+}
+
+async function startFavoriteAction(
+  payload: FavoriteWorkflowStartPayload,
+): Promise<FavoriteWorkflowResult> {
+  const comicId = String(payload.comicId ?? "").trim();
+  const action = payload.action;
+  if (!comicId) {
+    return {
+      status: "failed",
+      favorited: false,
+      committed: false,
+      message: "comicId 不能为空",
+      errorCode: "INVALID_COMIC_ID",
+    };
+  }
+  if (action === "add") {
+    try {
+      await addCopyFavorite(comicId);
+      return { status: "completed", favorited: true, committed: true };
+    } catch (error) {
+      return {
+        status: "failed",
+        favorited: false,
+        committed: false,
+        message: error instanceof Error ? error.message : String(error),
+        errorCode: "FAVORITE_REQUEST_FAILED",
+      };
+    }
+  }
+  if (action === "removeAll") {
+    try {
+      await removeCopyFavoriteByComic(comicId);
+      return { status: "completed", favorited: false, committed: true };
+    } catch (error) {
+      return {
+        status: "failed",
+        favorited: true,
+        committed: false,
+        message: error instanceof Error ? error.message : String(error),
+        errorCode: "FAVORITE_REQUEST_FAILED",
+      };
+    }
+  }
+  if (action === "removeFromTarget") {
+    const contextMap = toStringMap(payload.context);
+    const targetMap = toStringMap(contextMap.target);
+    const targetId = String("id" in targetMap ? (targetMap.id ?? "") : "").trim();
+    if (!targetId) {
+      return {
+        status: "failed",
+        favorited: true,
+        committed: false,
+        message: "缺少当前收藏夹信息，无法安全移除",
+        errorCode: "TARGET_REQUIRED",
+      };
+    }
+    const collectId = Number(targetId);
+    if (!Number.isFinite(collectId) || collectId <= 0) {
+      return {
+        status: "failed",
+        favorited: true,
+        committed: false,
+        message: "收藏夹 ID 无效",
+        errorCode: "INVALID_TARGET",
+      };
+    }
+    try {
+      const current = await queryFavoriteCollectId(comicId);
+      if (current !== null && current !== collectId) {
+        return {
+          status: "failed",
+          favorited: true,
+          committed: false,
+          message: "当前收藏不在目标收藏夹中，已拒绝移除",
+          errorCode: "TARGET_MISMATCH",
+        };
+      }
+      await removeCopyFavoriteByComic(comicId);
+      return { status: "completed", favorited: false, committed: true };
+    } catch (error) {
+      return {
+        status: "failed",
+        favorited: true,
+        committed: false,
+        message: error instanceof Error ? error.message : String(error),
+        errorCode: "FAVORITE_REQUEST_FAILED",
+      };
+    }
+  }
+  return {
+    status: "failed",
+    favorited: false,
+    committed: false,
+    message: "拷贝漫画只支持全局收藏与取消，不支持移动",
+    errorCode: "UNSUPPORTED_ACTION",
+  };
+}
+
+async function continueFavoriteAction(
+  payload: FavoriteWorkflowContinuePayload,
+): Promise<FavoriteWorkflowResult> {
+  if (!String(payload.comicId ?? "").trim()) {
+    return {
+      status: "failed",
+      favorited: false,
+      committed: false,
+      message: "comicId 不能为空",
+      errorCode: "INVALID_COMIC_ID",
+    };
+  }
+  return {
+    status: "failed",
+    committed: false,
+    message: "拷贝漫画收藏不需要继续交互",
+    errorCode: "UNSUPPORTED_CONTINUATION",
+  };
+}
+
+async function getCloudFavoriteData(
+  payload: CloudFavoritePayload = {},
+): Promise<ComicPagedListContract> {
+  const apiBase = await resolveApiBase();
+  const extern = toStringMap(payload.extern);
+  const page = Math.max(1, Number(payload.page ?? extern.page ?? 1) || 1);
+  const offset = (page - 1) * COLLECT_PAGE_SIZE;
+  const ordering =
+    String(payload.ordering ?? extern.ordering ?? DEFAULT_COLLECT_ORDERING).trim() ||
+    DEFAULT_COLLECT_ORDERING;
+  const params = new URLSearchParams({
+    limit: String(COLLECT_PAGE_SIZE),
+    offset: String(offset),
+    free_type: "1",
+    ordering,
+  });
+  let json: CopyApiResponse<CollectApiData>;
+  try {
+    json = await fetchCopyAuthedApi<CollectApiData>(
+      `${apiBase}/member/collect/comics?${params.toString()}`,
+    );
+  } catch (error) {
+    const message = String((error as Error).message ?? "");
+    const lowered = message.toLowerCase();
+    if (
+      lowered.includes("登录") ||
+      lowered.includes("登錄") ||
+      lowered.includes("token") ||
+      lowered.includes("unauthorized") ||
+      lowered.includes("401")
+    ) {
+      throw buildUnauthorizedError(PLUGIN_ID, "登录已失效，请重新登录");
+    }
+    throw error instanceof Error ? error : new Error(message || "获取收藏失败");
+  }
+  const resultsMap = toStringMap(json.results);
+  const rawList = "list" in resultsMap && Array.isArray(resultsMap.list) ? resultsMap.list : [];
+  const items = rawList
+    .map((row) => {
+      const rowMap = toStringMap(row);
+      const comicMap = toStringMap(rowMap.comic);
+      const collectId = "uuid" in rowMap ? Number(rowMap.uuid ?? 0) : 0;
+      const authorsRaw =
+        "author" in comicMap && Array.isArray(comicMap.author) ? comicMap.author : [];
+      const themesRaw = "theme" in comicMap && Array.isArray(comicMap.theme) ? comicMap.theme : [];
+      return mapCollectComicToGrid({
+        uuid: Number.isFinite(collectId) ? collectId : 0,
+        comic: {
+          name: "name" in comicMap ? String(comicMap.name ?? "") : "",
+          path_word: "path_word" in comicMap ? String(comicMap.path_word ?? "") : "",
+          cover: "cover" in comicMap ? String(comicMap.cover ?? "") : "",
+          author: authorsRaw.map((author) => ({
+            name: String(toStringMap(author).name ?? ""),
+          })),
+          popular: "popular" in comicMap ? Number(comicMap.popular ?? 0) : 0,
+          datetime_updated:
+            "datetime_updated" in comicMap ? String(comicMap.datetime_updated ?? "") : "",
+          last_chapter_name:
+            "last_chapter_name" in comicMap ? String(comicMap.last_chapter_name ?? "") : "",
+          theme: themesRaw.map((theme) => ({
+            name: String(toStringMap(theme).name ?? ""),
+          })),
+        },
+      });
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const limit = Number(
+    "limit" in resultsMap ? (resultsMap.limit ?? COLLECT_PAGE_SIZE) : COLLECT_PAGE_SIZE,
+  );
+  const pageSize = Number.isFinite(limit) && limit > 0 ? limit : COLLECT_PAGE_SIZE;
+  return {
+    source: PLUGIN_ID,
+    extern: payload.extern ?? null,
+    scheme: {
+      version: "1.0.0",
+      type: "cloudFavoriteFeed",
+      card: "comicGrid",
+    },
+    data: {
+      items,
+      hasReachedMax: items.length < pageSize,
+    },
+  };
+}
+
+async function getCloudFavoriteSceneBundle(): Promise<ComicListSceneBundleContract> {
+  return {
+    source: PLUGIN_ID,
+    scheme: { version: "1.0.0", type: "comicListSceneBundle" },
+    data: { scene: buildCopyCloudFavoriteScene() },
+  };
+}
+
+async function getCloudFavoriteFilterBundle(
+  payload: { extern?: Record<string, unknown> } = {},
+): Promise<FilterBundleContract> {
+  const extern = toStringMap(payload.extern);
+  const ordering =
+    String(extern.ordering ?? DEFAULT_COLLECT_ORDERING).trim() || DEFAULT_COLLECT_ORDERING;
+  return {
+    source: PLUGIN_ID,
+    scheme: {
+      version: "1.0.0",
+      type: "filter",
+      title: "云端收藏筛选",
+      fields: [
+        {
+          key: "ordering",
+          kind: "choice",
+          label: "排序",
+          options: COLLECT_ORDERING_OPTIONS.map((item) => ({
+            label: item.label,
+            value: item.value,
+            result: { extern: { ordering: item.value } },
+          })),
+        },
+      ],
+    },
+    data: { values: { ordering } },
+  };
+}
+
 async function getSettingsBundle(): Promise<SettingsBundleContract> {
   await resolveApiBase();
   const supportedChoices = new Set(API_DOMAIN_OPTIONS.map((item) => item.value));
@@ -1933,7 +2537,9 @@ async function getSettingsBundle(): Promise<SettingsBundleContract> {
       ],
     },
     data: {
-      canShowUserInfo: false,
+      canShowUserInfo: true,
+      canLogin: true,
+      loginTitle: "拷贝漫画登录",
       values: {
         [API_DOMAIN_CONFIG_KEY]: selectedApiDomainChoice,
         [PLATFORM_CONFIG_KEY]: selectedPlatformValue,
@@ -1993,4 +2599,13 @@ export default {
   getSettingsBundle,
   saveSettings,
   getCapabilitiesBundle,
+  getLoginBundle,
+  loginWithPassword,
+  getUserInfoBundle,
+  toggleFavorite,
+  startFavoriteAction,
+  continueFavoriteAction,
+  getCloudFavoriteData,
+  getCloudFavoriteSceneBundle,
+  getCloudFavoriteFilterBundle,
 };

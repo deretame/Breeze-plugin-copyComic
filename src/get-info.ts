@@ -1,39 +1,7 @@
+import type { InfoContract } from "breeze-plugin-kit";
 import { PLUGIN_ID, PLUGIN_VERSION } from "./config";
 
-function buildManifestComicListScene(input: {
-  title: string;
-  list: {
-    fnPath: string;
-    core?: Record<string, unknown>;
-    extern?: Record<string, unknown>;
-  };
-  filter?: {
-    fnPath: string;
-    core?: Record<string, unknown>;
-    extern?: Record<string, unknown>;
-  };
-}) {
-  return {
-    title: input.title,
-    source: PLUGIN_ID,
-    list: {
-      fnPath: input.list.fnPath,
-      core: input.list.core ?? {},
-      extern: input.list.extern ?? {},
-    },
-    ...(input.filter
-      ? {
-          filter: {
-            fnPath: input.filter.fnPath,
-            core: input.filter.core ?? {},
-            extern: input.filter.extern ?? {},
-          },
-        }
-      : {}),
-  };
-}
-
-export function buildPluginInfo() {
+export function buildPluginInfo(): InfoContract {
   return {
     name: "拷贝漫画",
     uuid: PLUGIN_ID,
@@ -51,10 +19,18 @@ export function buildPluginInfo() {
         action: {
           type: "openComicList",
           payload: {
-            scene: buildManifestComicListScene({
+            scene: {
               title: "漫画推荐",
-              list: { fnPath: "getHomeRecommend", extern: {} },
-            }),
+              source: PLUGIN_ID,
+              body: {
+                type: "pluginPagedComicList",
+                request: {
+                  fnPath: "getHomeRecommend",
+                  core: {},
+                  extern: {},
+                },
+              },
+            },
           },
         },
       },
@@ -64,10 +40,18 @@ export function buildPluginInfo() {
         action: {
           type: "openComicList",
           payload: {
-            scene: buildManifestComicListScene({
+            scene: {
               title: "全新上架",
-              list: { fnPath: "getHomeNewest", extern: {} },
-            }),
+              source: PLUGIN_ID,
+              body: {
+                type: "pluginPagedComicList",
+                request: {
+                  fnPath: "getHomeNewest",
+                  core: {},
+                  extern: {},
+                },
+              },
+            },
           },
         },
       },
@@ -77,11 +61,23 @@ export function buildPluginInfo() {
         action: {
           type: "openComicList",
           payload: {
-            scene: buildManifestComicListScene({
+            scene: {
               title: "发现",
-              list: { fnPath: "getHomeDiscover", extern: {} },
-              filter: { fnPath: "getHomeDiscoverFilterBundle", extern: {} },
-            }),
+              source: PLUGIN_ID,
+              body: {
+                type: "pluginPagedComicList",
+                request: {
+                  fnPath: "getHomeDiscover",
+                  core: {},
+                  extern: {},
+                },
+              },
+              filter: {
+                fnPath: "getHomeDiscoverFilterBundle",
+                core: {},
+                extern: {},
+              },
+            },
           },
         },
       },
@@ -91,11 +87,49 @@ export function buildPluginInfo() {
         action: {
           type: "openComicList",
           payload: {
-            scene: buildManifestComicListScene({
+            scene: {
               title: "排行榜",
-              list: { fnPath: "getHomeRank", extern: {} },
-              filter: { fnPath: "getHomeRankFilterBundle", extern: {} },
-            }),
+              source: PLUGIN_ID,
+              body: {
+                type: "pluginPagedComicList",
+                request: {
+                  fnPath: "getHomeRank",
+                  core: {},
+                  extern: {},
+                },
+              },
+              filter: {
+                fnPath: "getHomeRankFilterBundle",
+                core: {},
+                extern: {},
+              },
+            },
+          },
+        },
+      },
+      {
+        id: "cloudFavorite",
+        title: "云端收藏",
+        action: {
+          type: "openComicList",
+          payload: {
+            scene: {
+              title: "云端收藏",
+              source: PLUGIN_ID,
+              body: {
+                type: "pluginPagedComicList",
+                request: {
+                  fnPath: "getCloudFavoriteData",
+                  core: {},
+                  extern: { source: "cloudFavorite" },
+                },
+              },
+              filter: {
+                fnPath: "getCloudFavoriteFilterBundle",
+                core: {},
+                extern: { source: "cloudFavorite" },
+              },
+            },
           },
         },
       },
@@ -103,6 +137,6 @@ export function buildPluginInfo() {
   };
 }
 
-export function buildManifestInfo() {
+export function buildManifestInfo(): InfoContract {
   return buildPluginInfo();
 }

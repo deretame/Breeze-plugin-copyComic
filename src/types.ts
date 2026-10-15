@@ -130,6 +130,7 @@ export type DetailApiGroup = {
 };
 
 export type DetailApiComic = {
+  uuid?: string;
   name?: string;
   path_word?: string;
   cover?: string;
@@ -199,4 +200,34 @@ export type CachedChapterContent = {
 
 export type CachedGetChapterResult = {
   chapter: Record<string, unknown>;
+};
+
+export type CollectApiItem = {
+  uuid?: number;
+  folder_id?: number | null;
+  comic?: SearchApiComic & { uuid?: string };
+};
+
+export type CollectApiData = {
+  list?: CollectApiItem[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+};
+
+export type MemberInfoResult = {
+  user_id?: string;
+  username?: string;
+  nickname?: string;
+  avatar?: string;
+};
+
+export type ComicQueryResult = {
+  collect?: number | null;
+  is_login?: boolean;
+};
+
+export type CloudFavoritePayload = BasePayload & {
+  page?: number;
+  ordering?: string;
 };
