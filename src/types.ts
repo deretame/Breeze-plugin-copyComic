@@ -189,6 +189,7 @@ export type MappedEpItem = {
   id: string;
   name: string;
   order: number;
+  groupTitle: string | null;
   extern: Record<string, unknown>;
 };
 
@@ -210,6 +211,25 @@ export type CollectApiItem = {
 
 export type CollectApiData = {
   list?: CollectApiItem[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+};
+export type ComicCommentItem = {
+  id?: number | string;
+  create_at?: string;
+  user_id?: string;
+  user_name?: string;
+  user_avatar?: string;
+  comment?: string;
+  count?: number;
+  parent_id?: number | string | null;
+  parent_user_id?: string | null;
+  parent_user_name?: string | null;
+};
+
+export type ComicCommentData = {
+  list?: ComicCommentItem[];
   total?: number;
   limit?: number;
   offset?: number;

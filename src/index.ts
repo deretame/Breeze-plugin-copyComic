@@ -8,6 +8,11 @@ import type {
   ComicListScene,
   ComicListSceneBundleContract,
   ComicPagedListContract,
+  CommentFeedContract,
+  CommentFeedPayload,
+  CommentItem,
+  CommentRepliesContract,
+  CommentRepliesPayload,
   FavoriteWorkflowContinuePayload,
   FavoriteWorkflowResult,
   FavoriteWorkflowStartPayload,
@@ -15,12 +20,10 @@ import type {
   LoginBundleContract,
   LoginSubmitPayload,
   LoginSubmitResult,
-  OpenSearchAction,
+  OpenComicListAction,
   ReadSnapshotContract,
   SearchResultContract,
   StringMap,
-  ToggleFavoritePayload,
-  ToggleFavoriteResult,
   UserInfoBundleContract,
 } from "breeze-plugin-kit";
 import {
@@ -62,6 +65,8 @@ import type {
   CloudFavoritePayload,
   CollectApiData,
   CollectApiItem,
+  ComicCommentData,
+  ComicCommentItem,
   ComicDetailPayload,
   ComicQueryResult,
   CopyApiResponse,
@@ -350,27 +355,24 @@ async function resolvePlatformValue() {
   return resolved;
 }
 
-function openSearchAction(keyword: string, extern: Record<string, unknown> = {}): OpenSearchAction {
+function openTagAuthorListAction(
+  title: string,
+  extern: Record<string, unknown> = {},
+): OpenComicListAction {
   return {
-    type: "openSearch",
+    type: "openComicList",
     payload: {
-      source: PLUGIN_ID,
-      keyword,
-      extern,
+      scene: {
+        title,
+        source: PLUGIN_ID,
+        body: {
+          type: "pluginPagedComicList",
+          request: { fnPath: "getTagAuthorList", extern: toStringMap(extern) },
+        },
+        filter: { fnPath: "getTagAuthorListFilterBundle", extern: toStringMap(extern) },
+      },
     },
   };
-}
-
-function buildExternSearchUrl(params: Record<string, string>) {
-  const search = new URLSearchParams({
-    limit: "21",
-    offset: "0",
-    ordering: "-datetime_updated",
-    free_type: "1",
-    platform: "3",
-    ...params,
-  });
-  return `https://api.copy2000.online/api/v3/comics?${search.toString()}`;
 }
 
 async function getInfo(): Promise<ReturnType<typeof buildPluginInfo>> {
@@ -804,6 +806,7 @@ function pickTargetChapter(
     id: string;
     name: string;
     order: number;
+    groupTitle: string | null;
     extern: Record<string, unknown>;
   }>,
   chapterIdInput: unknown,
@@ -856,12 +859,16 @@ async function readChapterCache(cacheKey: string): Promise<MappedEpItem[] | null
     const eps = Array.isArray(data.eps) ? data.eps : [];
     const mapped = eps
       .map((item) => toStringMap(item))
-      .map((item) => ({
-        id: String(item.id ?? "").trim(),
-        name: String(item.name ?? "").trim(),
-        order: Number(item.order ?? 0) || 0,
-        extern: toStringMap(item.extern),
-      }))
+      .map((item) => {
+        const groupTitle = String(item.groupTitle ?? "").trim();
+        return {
+          id: String(item.id ?? "").trim(),
+          name: String(item.name ?? "").trim(),
+          order: Number(item.order ?? 0) || 0,
+          groupTitle: groupTitle || null,
+          extern: toStringMap(item.extern),
+        };
+      })
       .filter((item) => item.id);
     return mapped;
   } catch {
@@ -877,11 +884,12 @@ async function writeChapterCache(cacheKey: string, eps: MappedEpItem[]) {
         (ep) =>
           ({
             id: ep.id,
-            requestId: "",
-            logicalKey: "",
-            storageChapterId: "",
+            requestId: ep.id,
+            logicalKey: ep.id,
+            storageChapterId: ep.id,
             name: ep.name,
             order: ep.order,
+            groupTitle: ep.groupTitle,
             extern: ep.extern,
           }) as ChapterSummary,
       ),
@@ -1075,14 +1083,16 @@ async function fetchAllGroupChapters(comicId: string, groups: DetailApiGroup[]) 
     ) as ChapterApiItem[];
 
     const groupName = String(group.name ?? "").trim();
+    const groupTitle = groupName || null;
     for (const chapter of chapterList) {
       const chapterId = String(chapter.uuid ?? "").trim();
       if (!chapterId) continue;
       const chapterName = String(chapter.name ?? "").trim() || `第${order}话`;
       list.push({
         id: chapterId,
-        name: groupName ? `${groupName} - ${chapterName}` : chapterName,
+        name: chapterName,
         order,
+        groupTitle,
         extern: {
           sort: order,
           groupPathWord,
@@ -1353,6 +1363,156 @@ async function getHomeRank(payload: RankPayload = {}): Promise<ComicPagedListCon
       list: "comicGrid",
     },
     data: { hasReachedMax: paging.hasReachedMax, items },
+  };
+}
+async function getTagAuthorList(
+  payload: { page?: number; extern?: Record<string, unknown> } = {},
+): Promise<ComicPagedListContract> {
+  const apiBase = await resolveApiBase();
+  const platform = await resolvePlatformValue();
+  const extern = toStringMap(payload.extern);
+  const page = Math.max(1, Number(payload.page ?? 1) || 1);
+  const limit = HOME_PAGE_SIZE;
+  const offset = (page - 1) * limit;
+  const author = String(extern.author ?? "").trim();
+  const theme = String(extern.theme ?? "").trim();
+  const ordering = String(extern.ordering ?? "-datetime_updated").trim() || "-datetime_updated";
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+    ordering,
+    free_type: "1",
+    platform,
+  });
+  if (author) params.set("author", author);
+  if (theme) params.set("theme", theme);
+  const apiUrl = `${apiBase}/comics?${params.toString()}`;
+  const json = await fetchCopyApi<SearchApiData>(apiUrl);
+  const data = toStringMap(json.results);
+  const list = (Array.isArray(data.list) ? data.list : []) as SearchApiComic[];
+  const items = list
+    .map((item) => mapSearchComicToGrid(item))
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const total = Number(data.total ?? items.length) || items.length;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  const paging = createPagingInfo(page, pageCount, total);
+  return {
+    source: PLUGIN_ID,
+    extern: payload.extern ?? null,
+    scheme: { version: "1.0.0", type: "searchResult", source: PLUGIN_ID, list: "comicGrid" },
+    data: { hasReachedMax: paging.hasReachedMax, items },
+  };
+}
+async function getTagAuthorListFilterBundle(
+  payload: { extern?: Record<string, unknown> } = {},
+): Promise<FilterBundleContract> {
+  const extern = toStringMap(payload.extern);
+  return {
+    source: PLUGIN_ID,
+    scheme: {
+      version: "1.0.0",
+      type: "comicListFilter",
+      title: "排序",
+      fields: [
+        {
+          key: "ordering",
+          kind: "choice",
+          label: "排序",
+          options: DISCOVER_ORDERING_OPTIONS.map((item) => ({
+            label: item.label,
+            value: item.value,
+            result: { extern: { ordering: item.value } },
+          })),
+        },
+      ],
+    },
+    data: {
+      values: {
+        ordering: String(extern.ordering ?? "-datetime_updated"),
+      },
+    },
+  };
+}
+const COMMENT_PAGE_SIZE = 10;
+
+function mapComicCommentToItem(raw: ComicCommentItem): CommentItem {
+  const id = String(raw.id ?? "").trim();
+  const replyCount = Number(raw.count ?? 0) || 0;
+  return {
+    id,
+    author: {
+      name: String(raw.user_name ?? "").trim() || "匿名",
+      avatar: {
+        url: String(raw.user_avatar ?? "").trim(),
+        path: `comment/avatar/${String(raw.user_id ?? "").trim() || id}`,
+      },
+    },
+    content: String(raw.comment ?? ""),
+    createdAt: String(raw.create_at ?? "").trim(),
+    replyCount,
+    replies: [],
+    extern: { commentId: id, replyId: id },
+  };
+}
+
+async function fetchComicCommentPage(
+  comicId: string,
+  replyId: string,
+  page: number,
+): Promise<{ items: CommentItem[]; hasReachedMax: boolean }> {
+  const apiBase = await resolveApiBase();
+  const platform = await resolvePlatformValue();
+  const uuid = await fetchComicUuid(comicId);
+  const offset = (page - 1) * COMMENT_PAGE_SIZE;
+  const params = new URLSearchParams({
+    comic_id: uuid,
+    reply_id: replyId,
+    limit: String(COMMENT_PAGE_SIZE),
+    offset: String(offset),
+    platform,
+  });
+  const json = await fetchCopyApi<ComicCommentData>(`${apiBase}/comments?${params.toString()}`);
+  const data = toStringMap(json.results);
+  const list = (Array.isArray(data.list) ? data.list : []) as ComicCommentItem[];
+  const items = list.map(mapComicCommentToItem).filter((item) => item.id);
+  const total = Number(data.total ?? items.length) || items.length;
+  return { items, hasReachedMax: offset + COMMENT_PAGE_SIZE >= total };
+}
+
+async function getCommentFeed(payload: CommentFeedPayload = {}): Promise<CommentFeedContract> {
+  const comicId = String(payload.comicId ?? toStringMap(payload.extern).comicId ?? "").trim();
+  if (!comicId) throw new Error("comicId 不能为空");
+  const page = Math.max(1, Number(payload.page ?? 1) || 1);
+  const { items, hasReachedMax } = await fetchComicCommentPage(comicId, "", page);
+  return {
+    source: PLUGIN_ID,
+    extern: payload.extern ?? null,
+    scheme: { version: "1.0.0", type: "commentFeed" },
+    data: {
+      topItems: [],
+      items,
+      paging: { hasReachedMax },
+      replyMode: "lazy",
+      canComment: { comic: false, reply: false },
+    },
+  };
+}
+
+async function getCommentReplies(
+  payload: CommentRepliesPayload = {},
+): Promise<CommentRepliesContract> {
+  const extern = toStringMap(payload.extern);
+  const comicId = String(payload.comicId ?? extern.comicId ?? "").trim();
+  const commentId = String(payload.commentId ?? extern.commentId ?? extern.replyId ?? "").trim();
+  if (!comicId) throw new Error("comicId 不能为空");
+  if (!commentId) throw new Error("commentId 不能为空");
+  const page = Math.max(1, Number(payload.page ?? 1) || 1);
+  const { items, hasReachedMax } = await fetchComicCommentPage(comicId, commentId, page);
+  return {
+    source: PLUGIN_ID,
+    extern: payload.extern ?? null,
+    scheme: { version: "1.0.0", type: "commentReplies" },
+    data: { commentId, items, paging: { hasReachedMax } },
   };
 }
 
@@ -1646,26 +1806,18 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
   const authorActions = authorEntries.map((author) =>
     createActionItem(
       author.name,
-      openSearchAction(author.name, {
-        apiUrl: buildExternSearchUrl({
-          author: author.pathWord || author.name,
-        }),
-        searchType: "author",
-        keyword: author.name,
-        pathWord: author.pathWord || author.name,
+      openTagAuthorListAction(`作者：${author.name}`, {
+        author: author.pathWord || author.name,
+        ordering: "-datetime_updated",
       }),
     ),
   );
   const themeActions = themeEntries.map((theme) =>
     createActionItem(
       theme.name,
-      openSearchAction(theme.name, {
-        apiUrl: buildExternSearchUrl({
-          theme: theme.pathWord || theme.name,
-        }),
-        searchType: "theme",
-        keyword: theme.name,
-        pathWord: theme.pathWord || theme.name,
+      openTagAuthorListAction(`分类：${theme.name}`, {
+        theme: theme.pathWord || theme.name,
+        ordering: "-datetime_updated",
       }),
     ),
   );
@@ -1689,14 +1841,38 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
   const lastChapterName = String(
     "name" in lastChapterMap ? (lastChapterMap.name ?? "") : "",
   ).trim();
-  let isFavourite = false;
-  try {
-    if (await loadAuthToken()) {
-      isFavourite = (await queryFavoriteCollectId(comicId)) !== null;
+  async function resolveIsFavourite(): Promise<boolean> {
+    try {
+      if (await loadAuthToken()) {
+        return (await queryFavoriteCollectId(comicId)) !== null;
+      }
+    } catch {
+      // ignore, default to false
     }
-  } catch {
-    isFavourite = false;
+    return false;
   }
+  async function fetchCommentTotal(): Promise<number> {
+    try {
+      const apiBaseForCount = await resolveApiBase();
+      const uuidForCount = await fetchComicUuid(comicId);
+      const countParams = new URLSearchParams({
+        comic_id: uuidForCount,
+        limit: "1",
+        offset: "0",
+        platform: await resolvePlatformValue(),
+      });
+      const countJson = await fetchCopyApi<ComicCommentData>(
+        `${apiBaseForCount}/comments?${countParams.toString()}`,
+      );
+      return Number(toStringMap(countJson.results).total ?? 0) || 0;
+    } catch {
+      return 0;
+    }
+  }
+  const [isFavourite, totalComments] = await Promise.all([
+    resolveIsFavourite(),
+    fetchCommentTotal(),
+  ]);
 
   const normal = {
     comicInfo: {
@@ -1751,20 +1927,21 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
     },
     eps: eps.map((ep) => ({
       id: ep.id,
-      requestId: "",
-      logicalKey: "",
-      storageChapterId: "",
+      requestId: ep.id,
+      logicalKey: ep.id,
+      storageChapterId: ep.id,
       name: ep.name,
       order: ep.order,
+      groupTitle: ep.groupTitle,
       extern: ep.extern,
     })),
     recommend: [],
     totalViews: popular,
     totalLikes: popular,
-    totalComments: 0,
+    totalComments: totalComments,
     isFavourite,
     isLiked: false,
-    allowComments: false,
+    allowComments: true,
     allowLike: false,
     allowCollected: true,
     allowDownload: true,
@@ -1810,12 +1987,16 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}): Promise<ReadS
   const comicInfo = toStringMap(normal.comicInfo);
   const eps = (Array.isArray(normal.eps) ? normal.eps : [])
     .map((item) => toStringMap(item))
-    .map((item) => ({
-      id: String(item.id ?? "").trim(),
-      name: String(item.name ?? "").trim(),
-      order: Number(item.order ?? 0) || 0,
-      extern: toStringMap(item.extern),
-    }))
+    .map((item) => {
+      const groupTitle = String(item.groupTitle ?? "").trim();
+      return {
+        id: String(item.id ?? "").trim(),
+        name: String(item.name ?? "").trim(),
+        order: Number(item.order ?? 0) || 0,
+        groupTitle: groupTitle || null,
+        extern: toStringMap(item.extern),
+      };
+    })
     .filter((item) => item.id);
   if (eps.length === 0) {
     throw new Error("未找到可阅读章节");
@@ -1876,11 +2057,12 @@ async function getReadSnapshot(payload: ReadSnapshotPayload = {}): Promise<ReadS
       },
       chapter: {
         id: chapterId,
-        requestId: "",
-        logicalKey: "",
-        storageChapterId: "",
+        requestId: chapterId,
+        logicalKey: chapterId,
+        storageChapterId: chapterId,
         name: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
         order: targetChapter.order,
+        groupTitle: targetChapter.groupTitle,
         pages,
         extern: targetChapter.extern,
       },
@@ -1904,12 +2086,16 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
   const normal = toStringMap(toStringMap(detail.data).normal);
   const eps = (Array.isArray(normal.eps) ? normal.eps : [])
     .map((item) => toStringMap(item))
-    .map((item) => ({
-      id: String(item.id ?? "").trim(),
-      name: String(item.name ?? "").trim(),
-      order: Number(item.order ?? 0) || 0,
-      extern: toStringMap(item.extern),
-    }))
+    .map((item) => {
+      const groupTitle = String(item.groupTitle ?? "").trim();
+      return {
+        id: String(item.id ?? "").trim(),
+        name: String(item.name ?? "").trim(),
+        order: Number(item.order ?? 0) || 0,
+        groupTitle: groupTitle || null,
+        extern: toStringMap(item.extern),
+      };
+    })
     .filter((item) => item.id);
   if (eps.length === 0) {
     throw new Error("未找到可下载章节");
@@ -1922,11 +2108,15 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
     const cc = cached.chapter as Record<string, unknown>;
     const cachedChapter: ChapterWithPages = {
       id: (cc["id"] ?? cc["epId"] ?? "").toString(),
-      requestId: (cc["requestId"] ?? "").toString(),
-      logicalKey: (cc["logicalKey"] ?? "").toString(),
-      storageChapterId: (cc["storageChapterId"] ?? "").toString(),
+      requestId: (cc["requestId"] ?? cc["id"] ?? "").toString(),
+      logicalKey: (cc["logicalKey"] ?? cc["id"] ?? "").toString(),
+      storageChapterId: (cc["storageChapterId"] ?? cc["id"] ?? "").toString(),
       name: (cc["name"] ?? cc["epName"] ?? "").toString(),
       order: Number(cc["order"] ?? 0),
+      groupTitle:
+        cc["groupTitle"] == null || String(cc["groupTitle"]).trim() === ""
+          ? null
+          : String(cc["groupTitle"]),
       pages: (Array.isArray(cc["pages"])
         ? cc["pages"]
         : Array.isArray(cc["docs"])
@@ -1963,11 +2153,15 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
     const rcc = recheckCached.chapter as Record<string, unknown>;
     const recheckChapter: ChapterWithPages = {
       id: (rcc["id"] ?? rcc["epId"] ?? "").toString(),
-      requestId: (rcc["requestId"] ?? "").toString(),
-      logicalKey: (rcc["logicalKey"] ?? "").toString(),
-      storageChapterId: (rcc["storageChapterId"] ?? "").toString(),
+      requestId: (rcc["requestId"] ?? rcc["id"] ?? "").toString(),
+      logicalKey: (rcc["logicalKey"] ?? rcc["id"] ?? "").toString(),
+      storageChapterId: (rcc["storageChapterId"] ?? rcc["id"] ?? "").toString(),
       name: (rcc["name"] ?? rcc["epName"] ?? "").toString(),
       order: Number(rcc["order"] ?? 0),
+      groupTitle:
+        rcc["groupTitle"] == null || String(rcc["groupTitle"]).trim() === ""
+          ? null
+          : String(rcc["groupTitle"]),
       pages: (Array.isArray(rcc["pages"])
         ? rcc["pages"]
         : Array.isArray(rcc["docs"])
@@ -2030,11 +2224,12 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
 
   const chapter = {
     id: chapterId,
-    requestId: "",
-    logicalKey: "",
-    storageChapterId: "",
+    requestId: chapterId,
+    logicalKey: chapterId,
+    storageChapterId: chapterId,
     name: chapterContent.name || targetChapter.name || `章节 ${chapterId}`,
     order: targetChapter.order,
+    groupTitle: targetChapter.groupTitle,
     pages: docs,
     extern: targetChapter.extern,
   };
@@ -2061,9 +2256,9 @@ async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentC
       chapter,
       chapters: eps.map((item) => ({
         id: item.id,
-        requestId: "",
-        logicalKey: "",
-        storageChapterId: "",
+        requestId: item.id,
+        logicalKey: item.id,
+        storageChapterId: item.id,
         name: item.name || `章节 ${item.id}`,
         order: item.order,
         extern: {
@@ -2225,20 +2420,6 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
       extern: { userId, username },
     },
   };
-}
-
-async function toggleFavorite(payload: ToggleFavoritePayload = {}): Promise<ToggleFavoriteResult> {
-  const comicId = String(payload.comicId ?? "").trim();
-  if (!comicId) {
-    throw new Error("comicId 不能为空");
-  }
-  const favorited = payload.currentFavorite !== true;
-  if (favorited) {
-    await addCopyFavorite(comicId);
-  } else {
-    await removeCopyFavoriteByComic(comicId);
-  }
-  return { favorited, nextStep: "none" };
 }
 
 async function startFavoriteAction(
@@ -2586,12 +2767,14 @@ export default {
   getCapabilities,
   searchComic,
   getHomeRecommend,
-  getHomeNewest,
   getHomeDiscover,
   getHomeDiscoverFilterBundle,
+  getTagAuthorList,
+  getTagAuthorListFilterBundle,
   getHomeRank,
-  getHomeRankFilterBundle,
   getComicDetail,
+  getCommentFeed,
+  getCommentReplies,
   getChapter,
   getReadSnapshot,
   fetchImageBytes,
@@ -2602,7 +2785,6 @@ export default {
   getLoginBundle,
   loginWithPassword,
   getUserInfoBundle,
-  toggleFavorite,
   startFavoriteAction,
   continueFavoriteAction,
   getCloudFavoriteData,

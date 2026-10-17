@@ -1,6 +1,6 @@
 {
   "name": "breeze-plugin-copy-comic",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "files": [
     "dist"
   ],
@@ -16,7 +16,7 @@
     "dev:serve": "tsx dev-server.ts"
   },
   "dependencies": {
-    "breeze-plugin-kit": "^0.14.0"
+    "breeze-plugin-kit": "^0.16.0"
   },
   "devDependencies": {
     "@rspack/cli": "^2.1.8",

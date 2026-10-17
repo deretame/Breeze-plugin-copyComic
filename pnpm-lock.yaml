@@ -167,8 +167,8 @@ importers:
   .:
     dependencies:
       breeze-plugin-kit:
-        specifier: ^0.14.0
-        version: 0.14.0
+        specifier: ^0.16.0
+        version: 0.16.0
     devDependencies:
       '@rspack/cli':
         specifier: ^2.1.8
@@ -968,8 +968,8 @@ packages:
   boolbase@1.0.0:
     resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
 
-  breeze-plugin-kit@0.14.0:
-    resolution: {integrity: sha512-fEbx4W8y6jw3XsIUYaCqNcAUZRPdqlxMV7B8/G8B1vHSATwLIVKOp2YWQB2qGgd0xcVMzpxacEqu136AjFwEZw==}
+  breeze-plugin-kit@0.16.0:
+    resolution: {integrity: sha512-lEZZ28zIQdNZk03cDXb2/cwwja6P+cvYn1sNQMxGulnslexbevuHDDTtHQ/Mg+2tTmEe3JRQRhJYDr+x5JqyvA==}
 
   cheerio-select@2.1.0:
     resolution: {integrity: sha512-9v9kG0LvzrlcungtnJtpGNxY+fzECQKhK4EGJX2vByejiMX84MFNQw4UxPJl3bFbTMw+Dfs37XaIkCwTZfLh4g==}
@@ -1553,7 +1553,7 @@ snapshots:
 
   boolbase@1.0.0: {}
 
-  breeze-plugin-kit@0.14.0: {}
+  breeze-plugin-kit@0.16.0: {}
 
   cheerio-select@2.1.0:
     dependencies:
