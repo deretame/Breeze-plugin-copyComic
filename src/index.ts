@@ -1,4 +1,5 @@
 import type {
+  AdvancedSearchContract,
   CapabilitiesBundleContract,
   ChapterContentContract,
   ChapterPage,
@@ -213,6 +214,12 @@ const DISCOVER_ORDERING_OPTIONS: Array<{ label: string; value: string }> = [
   { label: "最旧", value: "datetime_updated" },
   { label: "热度最高", value: "-popular" },
   { label: "热度最低", value: "popular" },
+];
+const SEARCH_SCOPE_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: "全部", value: "" },
+  { label: "标题", value: "name" },
+  { label: "作者", value: "author" },
+  { label: "汉化组", value: "local" },
 ];
 const API_DOMAIN_BASE_MAP: Record<string, string> = {
   国际服: "https://api.mangacopy.com/api/v3",
@@ -1685,6 +1692,25 @@ async function getCapabilities(): Promise<CapabilitiesBundleContract> {
     data: {},
   };
 }
+async function getAdvancedSearchScheme(): Promise<AdvancedSearchContract> {
+  return {
+    source: PLUGIN_ID,
+    scheme: {
+      version: "1.0.0",
+      type: "advancedSearch",
+      title: "高级搜索",
+      fields: [
+        {
+          key: "q_type",
+          kind: "choice",
+          label: "搜索范围",
+          options: SEARCH_SCOPE_OPTIONS.map((item) => ({ label: item.label, value: item.value })),
+        },
+      ],
+    },
+    data: { values: { q_type: "" } },
+  };
+}
 
 async function searchComic(payload: SearchPayload = {}): Promise<SearchResultContract> {
   const apiBase = await resolveApiBase();
@@ -1694,6 +1720,8 @@ async function searchComic(payload: SearchPayload = {}): Promise<SearchResultCon
   const externSearchType = String(extern.searchType ?? "").trim();
   const externPathWord = String(extern.pathWord ?? "").trim();
   const externApiUrl = String(extern.apiUrl ?? extern.searchUrl ?? extern.url ?? "").trim();
+
+  const scopeQType = String(extern.q_type ?? "").trim();
 
   if (!keyword && !externApiUrl) {
     throw new Error("keyword 不能为空");
@@ -1721,7 +1749,7 @@ async function searchComic(payload: SearchPayload = {}): Promise<SearchResultCon
           limit: String(SEARCH_PAGE_SIZE),
           offset: String(offset),
           q: keyword,
-          q_type: "",
+          q_type: scopeQType,
           platform: "1",
         });
         return `${apiBase}/search/comic?${params.toString()}`;
@@ -2766,6 +2794,7 @@ export default {
   getInfo,
   getCapabilities,
   searchComic,
+  getAdvancedSearchScheme,
   getHomeRecommend,
   getHomeNewest,
   getHomeDiscover,
