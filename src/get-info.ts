@@ -12,6 +12,8 @@ export function buildPluginInfo(): InfoContract {
     home: "https://github.com/deretame/Breeze-plugin-copyComic",
     updateUrl: "https://api.github.com/repos/deretame/Breeze-plugin-copyComic/releases/latest",
     npmName: "breeze-plugin-copy-comic",
+    haveHome: true,
+    haveCloudFavorite: true,
     function: [
       {
         id: "recommend",

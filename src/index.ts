@@ -18,10 +18,15 @@ import type {
   FavoriteWorkflowResult,
   FavoriteWorkflowStartPayload,
   FilterBundleContract,
+  GetPluginCloudFavoritePagesBundlePayload,
+  GetPluginHomePagesBundlePayload,
   LoginBundleContract,
   LoginSubmitPayload,
   LoginSubmitResult,
   OpenComicListAction,
+  PluginCloudFavoritePagesBundleContract,
+  PluginHomePagesBundleContract,
+  PluginHomeTab,
   ReadSnapshotContract,
   SearchResultContract,
   StringMap,
@@ -567,6 +572,7 @@ async function loadAuthToken() {
 }
 
 const AUTH_USERNAME_CONFIG_KEY = "auth.username";
+const AUTH_PASSWORD_CONFIG_KEY = "auth.password";
 const COLLECT_PAGE_SIZE = 21;
 const DEFAULT_COLLECT_ORDERING = "-datetime_modifier";
 const COLLECT_ORDERING_OPTIONS: Array<{ label: string; value: string }> = [
@@ -759,6 +765,11 @@ function buildCopyCloudFavoriteScene(): ComicListScene {
         core: {},
         extern: { source: "cloudFavorite" },
       },
+    },
+    filter: {
+      fnPath: "getCloudFavoriteFilterBundle",
+      core: {},
+      extern: { source: "cloudFavorite" },
     },
   };
 }
@@ -2356,17 +2367,31 @@ async function submitCopyLogin(
     password: encrypted,
     salt: "1729",
   }).toString();
-  const resp = (await ky
-    .post(`${apiBase}/login`, {
-      headers: {
-        ...(await getApiHeaders()),
-        "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-      },
-      body,
-    })
-    .json()) as CopyApiResponse<MemberInfoResult & { token?: string }>;
-  if (Number(resp.code ?? 0) !== 200) {
-    throw new Error(resp.message || "登录失败");
+  // 复用现成反盗版绕过：正常头先调，命中反盗版文案换 APP 头重试（见 fetchCopyApi）。
+  const tryPost = async (headers: Record<string, string>) => {
+    const resp = (await ky
+      .post(`${apiBase}/login`, { headers, body })
+      .json()) as CopyApiResponse<MemberInfoResult & { token?: string }>;
+    if (Number(resp.code ?? 0) !== 200) {
+      throw new Error(resp.message || "登录失败");
+    }
+    return resp;
+  };
+  let resp: CopyApiResponse<MemberInfoResult & { token?: string }>;
+  try {
+    resp = await tryPost({
+      ...(await getApiHeaders()),
+      "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+    });
+  } catch (error) {
+    if (!isAntiPiracyMessage(String((error as Error).message ?? ""))) {
+      throw error;
+    }
+    console.log(`[fallback] login anti-piracy detected, retry with app headers`);
+    resp = await tryPost({
+      ...getAppFallbackHeaders(),
+      "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+    });
   }
   const resultsMap = toStringMap(resp.results);
   const token = "token" in resultsMap ? String(resultsMap.token ?? "").trim() : "";
@@ -2376,6 +2401,7 @@ async function submitCopyLogin(
   await Promise.allSettled([
     authConfig.save(AUTH_TOKEN_CONFIG_KEY, token),
     authConfig.save(AUTH_USERNAME_CONFIG_KEY, username),
+    authConfig.save(AUTH_PASSWORD_CONFIG_KEY, password),
   ]);
   return resp;
 }
@@ -2411,6 +2437,50 @@ async function loginWithPassword(payload: LoginSubmitPayload = {}): Promise<Logi
     source: PLUGIN_ID,
     message: "登录成功",
     data: { username },
+  };
+}
+async function loginForInit(): Promise<void> {
+  let username = "";
+  let password = "";
+  try {
+    username = String(await authConfig.load(AUTH_USERNAME_CONFIG_KEY, "")).trim();
+  } catch {
+    username = "";
+  }
+  try {
+    password = String(await authConfig.load(AUTH_PASSWORD_CONFIG_KEY, ""));
+  } catch {
+    password = "";
+  }
+  if (!username || !password) {
+    console.info("[copy.init] skip login: no credentials");
+    return;
+  }
+  // 反盗版绕过在 submitCopyLogin 层处理（正常头→APP 头），这里只做 3 次重试。
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await submitCopyLogin(username, password);
+      console.info(`[copy.init] login ok (attempt ${attempt})`);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[copy.init] login failed (attempt ${attempt}/3)`, error);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`登录失败，已重试 3 次: ${String(lastError)}`);
+}
+
+async function init(): Promise<{ source: string; data: Record<string, unknown> }> {
+  console.debug("init");
+  await resolveApiBase();
+  // 走完登录（最多 3 次）才算 init 成功；无账号直接返回成功。拷贝漫画无签到接口。
+  await loginForInit();
+  return {
+    source: PLUGIN_ID,
+    data: { ok: true, started: true },
   };
 }
 
@@ -2688,6 +2758,79 @@ async function getCloudFavoriteFilterBundle(
     data: { values: { ordering } },
   };
 }
+async function getPluginHomePagesBundle(
+  _payload: GetPluginHomePagesBundlePayload = {},
+): Promise<PluginHomePagesBundleContract> {
+  const tabs: PluginHomeTab[] = [
+    {
+      id: "recommend",
+      title: "漫画推荐",
+      scene: {
+        title: "漫画推荐",
+        source: PLUGIN_ID,
+        body: {
+          type: "pluginPagedComicList",
+          request: { fnPath: "getHomeRecommend", core: {}, extern: {} },
+        },
+      },
+    },
+    {
+      id: "newest",
+      title: "全新上架",
+      scene: {
+        title: "全新上架",
+        source: PLUGIN_ID,
+        body: {
+          type: "pluginPagedComicList",
+          request: { fnPath: "getHomeNewest", core: {}, extern: {} },
+        },
+      },
+    },
+    {
+      id: "discover",
+      title: "发现",
+      scene: {
+        title: "发现",
+        source: PLUGIN_ID,
+        body: {
+          type: "pluginPagedComicList",
+          request: { fnPath: "getHomeDiscover", core: {}, extern: {} },
+        },
+        filter: { fnPath: "getHomeDiscoverFilterBundle", core: {}, extern: {} },
+      },
+    },
+    {
+      id: "rank",
+      title: "排行榜",
+      scene: {
+        title: "排行榜",
+        source: PLUGIN_ID,
+        body: {
+          type: "pluginPagedComicList",
+          request: { fnPath: "getHomeRank", core: {}, extern: {} },
+        },
+        filter: { fnPath: "getHomeRankFilterBundle", core: {}, extern: {} },
+      },
+    },
+  ];
+  return {
+    source: PLUGIN_ID,
+    scheme: { version: "1.0.0", type: "homePagesBundle" },
+    data: { tabs },
+  };
+}
+
+async function getPluginCloudFavoritePagesBundle(
+  _payload: GetPluginCloudFavoritePagesBundlePayload = {},
+): Promise<PluginCloudFavoritePagesBundleContract> {
+  return {
+    source: PLUGIN_ID,
+    scheme: { version: "1.0.0", type: "cloudFavoritePagesBundle" },
+    data: {
+      tabs: [{ id: "cloudFavorite", title: "云端收藏", scene: buildCopyCloudFavoriteScene() }],
+    },
+  };
+}
 
 async function getSettingsBundle(): Promise<SettingsBundleContract> {
   await resolveApiBase();
@@ -2791,6 +2934,7 @@ export async function getCapabilitiesBundle(): Promise<CapabilitiesBundleContrac
 }
 
 export default {
+  init,
   getInfo,
   getCapabilities,
   searchComic,
@@ -2821,4 +2965,6 @@ export default {
   getCloudFavoriteData,
   getCloudFavoriteSceneBundle,
   getCloudFavoriteFilterBundle,
+  getPluginHomePagesBundle,
+  getPluginCloudFavoritePagesBundle,
 };
