@@ -656,7 +656,10 @@ async function addCopyFavorite(comicId: string): Promise<void> {
   try {
     resp = (await ky
       .post(`${apiBase}/member/collect/comic?platform=1`, {
-        headers: await getAuthedHeaders(),
+        headers: {
+          ...(await getAuthedHeaders()),
+          "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+        },
         body,
       })
       .json()) as CopyApiResponse<null>;
@@ -2369,9 +2372,9 @@ async function submitCopyLogin(
   }).toString();
   // 复用现成反盗版绕过：正常头先调，命中反盗版文案换 APP 头重试（见 fetchCopyApi）。
   const tryPost = async (headers: Record<string, string>) => {
-    const resp = (await ky
-      .post(`${apiBase}/login`, { headers, body })
-      .json()) as CopyApiResponse<MemberInfoResult & { token?: string }>;
+    const resp = (await ky.post(`${apiBase}/login`, { headers, body }).json()) as CopyApiResponse<
+      MemberInfoResult & { token?: string }
+    >;
     if (Number(resp.code ?? 0) !== 200) {
       throw new Error(resp.message || "登录失败");
     }
